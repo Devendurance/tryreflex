@@ -63,8 +63,13 @@
 
 ## DATABASE SCHEMA CHANGES
 
-- Whenever you make changes to the database schema, ALWAYS run the Drizzle generate and migrate commands.
+- Persistence runs on Neon Postgres via Drizzle ORM. Pooled `DATABASE_URL` serves the app, direct `DATABASE_URL_UNPOOLED` serves migrations, never fall back between them.
+- Whenever you make changes to the database schema, ALWAYS run `db:generate` then `db:migrate`.
 - NEVER run drizzle push.
+- Owned rows are scoped by `user_id` with composite `(user_id, id)` references. Repositories always filter on the authenticated context user; user-supplied ids never carry ownership.
+- Append-only tables (revisions, origins, sources, market snapshots, trade events, playbook rules, evidence, links) are protected by database triggers. Do not add update or delete paths for them.
+- Reasoning provider is Groq; the model comes from `GROQ_MODEL` (currently `openai/gpt-oss-120b`), never Qwen, and is never hardcoded in business logic. Embeddings are locked to `jina-embeddings-v5-text-small` at 1024 dimensions. Runtime config must reject mismatched values rather than coerce.
+- Never store API keys or secrets in `provider_connections.config` or `ai_runs`.
 
 ## TESTING
 

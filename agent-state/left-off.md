@@ -4,24 +4,24 @@ Last updated: 2026-10-07
 
 ## Just finished
 
-- Slice 1 implemented: public market-context API `POST /api/market/context` (stock quote/history + crypto sentiment) with honest unavailable handling.
-- Adapters in `src/server/integrations/bitget/`, domain in `src/server/market/`, route handler factory wired in `src/app/api/market/context/route.ts`.
-- 48 node:test cases green, `type-check`/`lint`/`build` clean. Post-review consolidation done: zod envelope + response boundary validation, strict date/numeric rules, AbortController wall deadline wired through transport fetch (regression-tested), strict media type check, verify:market exits 1 on upstream failure.
-- MCP discovery artifacts and live evidence stored in `C:\Users\USER\bitget-mcp-discovery`.
+- Neon persistence slice applied: `drizzle/0000_lucky_mother_askani.sql` migrated on real Neon (19 tables: users + 18 owned, pgvector, HNSW, immutability/append-only triggers).
+- Lead-authored live verifier `tests/db/live.integration.ts` passed with full ROLLBACK (`npm run db:verify`), artifact `C:\Users\USER\bitget-mcp-discovery\log-db-verify.txt`.
+- Final gate green: `test:all` 48+63 tests, type-check, lint, build.
 
 ## Currently working on
 
-- Slice 1 status: adapters/API implemented, successful data verification BLOCKED. Both upstreams still failing (equity 503 envelope, sentiment alt_me_error) as of 14:25 UTC.
+- Nothing in flight. Persistence slice complete; market slice still blocked on upstream payloads (implementation done, not rebuilt).
 
 ## Next up
 
-- Retry the same three live calls via `npm run verify:market` once upstream recovers, record real success payload shape, then mark slice 1 complete.
-- Then slice 2: authenticated decision parse+confirm with immutable snapshot (needs Postgres/Drizzle/Qwen, all unconfigured).
+- Next slice is ONLY the Groq structured provider (model from GROQ_MODEL). Then Jina embedding provider verification. Then authenticated decision capture/confirm once a real auth provider exists.
+- Retry `npm run verify:market` once upstreams recover to finish slice 1 verification.
 
 ## Known issues / open items
 
-- Upstream market providers down, success normalization unproven against real payloads.
-- 5 high severity npm audit findings, uninvestigated.
-- eslint 9.39.5 deprecation warning.
-- No git remote configured, so auto-push can't work until one is added.
-- Port 3000 is held by another local process (PID 32492). `next dev` uses 3001.
+- Upstream market failures last observed 2026-10-07 ~14:25 UTC (equity 503, sentiment alt_me_error); not re-probed since. Success shapes unverified.
+- No production auth provider in app; Neon neon_auth schema exists but is not integrated.
+- Jina/Groq adapters not built; embeddings verified with test vectors only.
+- npm audit: 9 findings (4 moderate, 5 high), historical, not remediated.
+- No git remote; push unavailable. Prior commit 9ae23cb exists; lead commits checkpoints.
+- Dev server on localhost:3001; foreign process on port 3000 untouched.
