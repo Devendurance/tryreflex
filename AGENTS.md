@@ -37,6 +37,13 @@
 - Keep them short. Bullets, not essays. `left-off.md` must always answer: what are we doing, what's done, what's next.
 - When the session gets compacted or messy, a new session resumes from these files.
 
+## CONTEXT MANAGEMENT
+
+- When the active agent session approaches roughly 250,000 consumed context tokens, proactively compact or summarize the working context before continuing. Do this before context degradation becomes noticeable.
+- Preserve the current objective, repository truth, completed checkpoints and commit hashes, architectural and product decisions, unresolved blockers, relevant environment variable names but never secret values, important implementation invariants, tests and verification state, and the exact next action.
+- Do not over-compress implementation-critical details.
+- After compaction, continue from the preserved state rather than re-auditing the entire repository.
+
 ## PLANNING MODE
 
 - Always ask clarifying questions.
