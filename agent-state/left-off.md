@@ -3,25 +3,23 @@
 Last updated: 2026-10-07
 
 ## Just finished
-
-- Neon persistence slice applied: `drizzle/0000_lucky_mother_askani.sql` migrated on real Neon (19 tables: users + 18 owned, pgvector, HNSW, immutability/append-only triggers).
-- Lead-authored live verifier `tests/db/live.integration.ts` passed with full ROLLBACK (`npm run db:verify`), artifact `C:\Users\USER\bitget-mcp-discovery\log-db-verify.txt`.
-- Final gate green: `test:all` 48+63 tests, type-check, lint, build.
+- Real AI + embedding foundation, following persistence checkpoint 635c0e4. Groq/Jina boundaries are separate, with origin analysis, canonical memory text, deduped storage and owner-filtered search.
+- Real Groq openai/gpt-oss-120b produced borrowed_conviction + social_confirmation with exact quotes. ai_runs model/version/status/metadata verified before rollback.
+- Real Jina v5 produced 3 document vectors and 1 query vector, all 1024 dimensions. Neon ranked social-call memory first (0.4925), then re-entry (0.3150), independent research (0.1763).
+- Dedupe and ownership passed. Rollback left zero temporary users/decisions/embeddings/ai_runs. Evidence: C:/Users/USER/bitget-mcp-discovery/log-ai-live.txt.
+- Full initial gate passed 48 market + 65 persistence + 38 AI. Review tests total 55 AI across passing groups, latest affected 31 passed. Latest type-check/lint/build passed.
+- No packages, migrations, new endpoints, frontend, AgentKey or Bitget changes.
 
 ## Currently working on
-
-- Nothing in flight. Persistence slice complete; market slice still blocked on upstream payloads (implementation done, not rebuilt).
+- Nothing in flight. AI/embedding slice complete. Existing market implementation preserved, real successful upstream payloads remain unverified.
 
 ## Next up
+- Select/configure a real AuthProvider, then build authenticated decision parse/confirm using existing Groq and immutable repositories.
+- Persist decision context and genuine trades in later invocations. Retry verify:market once upstreams recover.
 
-- Next slice is ONLY the Groq structured provider (model from GROQ_MODEL). Then Jina embedding provider verification. Then authenticated decision capture/confirm once a real auth provider exists.
-- Retry `npm run verify:market` once upstreams recover to finish slice 1 verification.
-
-## Known issues / open items
-
-- Upstream market failures last observed 2026-10-07 ~14:25 UTC (equity 503, sentiment alt_me_error); not re-probed since. Success shapes unverified.
-- No production auth provider in app; Neon neon_auth schema exists but is not integrated.
-- Jina/Groq adapters not built; embeddings verified with test vectors only.
-- npm audit: 9 findings (4 moderate, 5 high), historical, not remediated.
-- No git remote; push unavailable. Prior commit 9ae23cb exists; lead commits checkpoints.
-- Dev server on localhost:3001; foreign process on port 3000 untouched.
+## Known issues
+- No production auth provider in app. Neon-managed neon_auth exists but isn't integrated.
+- Market failures last observed 2026-10-07 ~14:25 UTC, not re-probed this slice.
+- Historical npm audit: 9 findings (4 moderate, 5 high), not remediated.
+- No git remote. Commit checkpoint, no push. STATE remains uncommitted, docs/architecture.md and public/brand preserved.
+- Existing dev server previously on 3001 and foreign port 3000 left untouched.

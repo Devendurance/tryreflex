@@ -42,7 +42,11 @@ Last updated: 2026-10-07
 - `src/server/db/`: schema modules (19 tables: users + 18 owned, composite (user_id,id) FKs, append-only triggers), config (lazy env, Neon/TLS + locked embedding validation), client (pooled session), repositories, validation. `src/server/auth/context.ts`: AuthProvider/requireAuth seam, no provider configured yet.
 - Locked stack: Groq openai/gpt-oss-120b for reasoning (never Qwen), Jina jina-embeddings-v5-text-small @ 1024 dims, AgentKey later.
 - Migration `drizzle/0000_lucky_mother_askani.sql` APPLIED to Neon (2026-10-07): CREATE EXTENSION vector, all checks/FKs, HNSW index, immutability + append-only + user-identity triggers. Verified by `tests/db/live.integration.ts` (`npm run db:verify`) inside full ROLLBACK. Never regenerate or alter 0000.
-- Tests: node:test via tsx under `tests/market/` (`npm test`), `tests/db/` (`npm run test:persistence`), `npm run test:all` (111 total). Live probes: `npm run verify:market`, `npm run db:verify`.
+- AI foundation in `src/server/ai/`: separate LLMProvider/EmbeddingProvider, Groq strict JSON Schema + Zod with grounding/no coercion, Jina retrieval.passage/query with locked 1024-vector validation, canonical memory text and deduped owner-scoped storage/search. Prompt is `src/server/decision-origin-prompt.ts`, version decision-origin.v1. No provider SDK/dependency additions.
+- Real AI verifier `scripts/verify-ai.ts` passed: Groq openai/gpt-oss-120b classified borrowed_conviction + social_confirmation with exact quotes, Jina v5 produced 3 document/1 query vectors of 1024 dimensions, Neon ranked social-call memory first and enforced ownership/dedupe. All temporary users/decisions/embeddings/ai_runs rolled back and zero remaining rows verified. Artifact `C:/Users/USER/bitget-mcp-discovery/log-ai-live.txt`.
+- Groq records user-scoped ai_runs with model/prompt version/status/latency, safe errors and token usage. Provider/start/end/attempts are in token_usage.run. No request/output/hidden reasoning persisted.
+- Tests: node:test via tsx under tests/market, tests/db, tests/ai. Full initial checkpoint passed 48+65+38, reviewed AI tests now total 55 across passing groups. Latest affected 31 tests, type-check, lint, build passed. Scripts test:ai and verify:ai added, test:all includes AI.
+- AuthProvider is still unconfigured. Highest-priority next slice is real authenticated decision parse/confirm, no fake application identities. No new endpoints or migration changes in the AI slice.
 
 ## Decisions made
 

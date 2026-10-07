@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { validateAuthContext, type AuthContext } from "../auth/context";
 import type { DbSession, Queryable } from "./client";
 import { getEmbeddingConfig } from "./config";
@@ -570,6 +571,54 @@ export function createRepositories(db: DbSession, auth: AuthContext) {
         throw new RepositoryError("embedding dedupe lookup failed", "CONFLICT");
       }
       return existing.rows[0];
+    },
+    async findBySource(input: unknown): Promise<Row | null> {
+      const parsed = z
+        .strictObject({
+          entityType: z.enum(["decision", "review", "pattern", "rule"]),
+          entityId: z.string().uuid(),
+          sourceText: z.string().min(1),
+        })
+        .safeParse(input);
+      if (!parsed.success) toValidationError(parsed.error);
+      const cfg = getEmbeddingConfig();
+      const result = await db.query<Row>(
+        `SELECT * FROM public.memory_embeddings WHERE user_id=$1 AND entity_type=$2 AND entity_id=$3 AND model=$4 AND dimensions=$5 AND source_hash=$6 LIMIT 1`,
+        [
+          userId,
+          parsed.data.entityType,
+          parsed.data.entityId,
+          cfg.model,
+          cfg.dimensions,
+          computeSourceHash(parsed.data.sourceText),
+        ],
+      );
+      return result.rows[0] ?? null;
+    },
+    async searchByVector(input: unknown): Promise<Row[]> {
+      const parsed = z
+        .strictObject({
+          embedding: z.array(z.number().finite()),
+          model: z.string(),
+          dimensions: z.number().int(),
+          limit: z.number().optional(),
+        })
+        .safeParse(input);
+      if (!parsed.success) toValidationError(parsed.error);
+      const cfg = getEmbeddingConfig();
+      const d = parsed.data;
+      if (d.model !== cfg.model || d.dimensions !== cfg.dimensions) {
+        throw new RepositoryError("embedding profile does not match the locked configuration", "INVALID_INPUT");
+      }
+      const check = validateEmbedding(d.embedding);
+      if (!check.valid) throw new RepositoryError(check.reason, "INVALID_INPUT");
+      const limit =
+        d.limit === undefined || !Number.isFinite(d.limit) ? 10 : Math.max(1, Math.min(100, Math.trunc(d.limit)));
+      const result = await db.query<Row>(
+        `SELECT id,entity_type,entity_id,model,dimensions,source_hash,source_text,metadata,1-(embedding <=> $2::vector) AS similarity FROM public.memory_embeddings WHERE user_id=$1 AND model=$3 AND dimensions=$4 ORDER BY embedding <=> $2::vector,id LIMIT $5`,
+        [userId, `[${d.embedding.join(",")}]`, d.model, d.dimensions, limit],
+      );
+      return result.rows;
     },
   };
 

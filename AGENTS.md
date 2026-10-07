@@ -60,6 +60,11 @@
 - No mock data and no synthetic market values. If a provider fails, return an honest unavailable status with a fixed safe message. Never pass `fetchedAt` off as `observedAt`, never invent currency or timestamps.
 - Never run the `bitget-signal` host installer (`scripts/install.js`). It writes to `~/.claude`, `~/.codex`, `~/.openclaw`. Plain `npm install` is safe because the package ships no lifecycle scripts.
 - Validate all external input with zod at the boundary. Reject unknown keys.
+- LLM generation and embeddings have separate provider-neutral interfaces in `src/server/ai/`. Groq structured results use strict JSON Schema plus Zod and must not be coerced, transformed, or silently stripped. Evidence IDs are default-denied unless supplied by an owned evidence source.
+- Decision origin prompt text and version live in `src/server/decision-origin-prompt.ts`. Observed input facts must be exact input quotes. Never infer impulse merely from absent research information.
+- Jina document embeddings use `retrieval.passage`, queries use `retrieval.query`. Preserve source text/hash and provider metadata, check owned entity references, and dedupe before paid embedding calls.
+- Groq requires an authenticated-user-scoped `ai_runs` recorder. Provider/timestamps/attempts live in `token_usage.run`, normalized counts in `token_usage.usage`. Store safe failure categories only, never prompts, credentials, raw provider bodies, or hidden reasoning.
+- AI checks: `npm run test:ai` for focused tests, `npm run verify:ai` for real Groq/Jina/Neon verification. The live verifier uses temporary transaction-scoped identities/entities and always rolls back. These identities must never be used by application routes.
 
 ## DATABASE SCHEMA CHANGES
 

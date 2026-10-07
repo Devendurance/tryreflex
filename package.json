@@ -10,10 +10,12 @@
     "type-check": "tsc --noEmit",
     "test": "node --import tsx --test tests/market/concurrency.test.ts tests/market/mcp.test.ts tests/market/normalize.test.ts tests/market/adapters.test.ts tests/market/service.test.ts tests/market/route.test.ts",
     "test:persistence": "node --import tsx --test tests/db/auth.test.ts tests/db/config.test.ts tests/db/validation.test.ts tests/db/repositories.test.ts tests/db/embeddings.test.ts tests/db/migration.test.ts",
-    "test:all": "npm test && npm run test:persistence",
+    "test:ai": "node --import tsx --test tests/ai/groq.test.ts tests/ai/jina.test.ts tests/ai/memory.test.ts tests/ai/verify-ai.test.ts tests/ai/origin.test.ts",
+    "test:all": "npm test && npm run test:persistence && npm run test:ai",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:verify": "tsx tests/db/live.integration.ts",
+    "verify:ai": "tsx scripts/verify-ai.ts",
     "verify:market": "tsx scripts/verify-market.ts"
   },
   "dependencies": {

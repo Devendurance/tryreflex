@@ -26,3 +26,8 @@ Durable facts, conventions, and gotchas that should survive across sessions.
 - On 2026-10-07 both upstreams were down during contract discovery: equity do_query returned HTTP 503 envelope, sentiment_index returned `{"alt_me_error": ""}`. Successful payload shape is still unverified.
 - `@bitget-ai/bitget-signal` has no npm lifecycle scripts. Its `scripts/install.js` writes host config only when run explicitly via the `bitget-signal` bin.
 - Next 16 with `cacheComponents: true` rejects `runtime`/`dynamic` route segment exports.
+- Groq gpt-oss-120b supports strict JSON Schema. Zod validates again and isDeepStrictEqual rejects coercion, default injection, or unknown-key stripping. Evidence refs default-deny without server-owned allowed IDs.
+- Jina v5 API uses task retrieval.passage for documents and retrieval.query for queries, dimensions 1024, float embeddings. Do not manually prefix API inputs. Dedupe by owned entity/model/dimensions/source hash before paid calls.
+- AI run metadata uses existing token_usage JSON: run contains provider/start/end/attempts, usage contains normalized counts. Raw prompts, provider bodies, keys and hidden reasoning are never persisted.
+- verify:ai uses only rollback-scoped test identities/entities. Actual Jina vectors verified social-call-first Neon ranking and owner filtering. Temporary rows were zero after rollback.
+- Git Bash artifact paths must use /c/Users/USER/... or quoted Windows paths. Unquoted backslashes caused root filenames C:UsersUSER... during this slice, repaired by moving the generated artifacts to the correct external folder.
