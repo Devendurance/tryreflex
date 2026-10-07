@@ -8,7 +8,7 @@ Last updated: 2026-10-07
 - Built for the Bitget AI Base Camp Hackathon S2, AI Trading Desk track, Review & Self-Evolution sub-theme.
 - Core loop: Decide → Trade → Understand → Learn → Evolve → Recall → Decide better.
 - Core thesis: separate decision quality from financial outcome, since P&L is a poor teacher.
-- Scaffold done, no application code written beyond the create-next-app template.
+- First backend slice shipped: public market-context API. Frontend still template.
 
 ## Stack
 
@@ -34,8 +34,12 @@ Last updated: 2026-10-07
 
 ## Architecture
 
-- `src/app/` holds the App Router entry points. Template files untouched.
-- No backend, database, or API routes yet.
+- `src/app/` holds the App Router entry points plus `api/market/context` (POST, dynamic).
+- Server domain code in `src/server/market/` (schemas, service, normalize, concurrency, context-handler). MCP adapters in `src/server/integrations/bitget/` (mcp.ts, stock.ts, signal.ts, errors.ts).
+- Two public MCP servers: agent.bitget.com/mcp (equities via `do_query` catalog), datahub.noxiaohao.com/mcp (crypto sentiment direct tools). Sessions bounded by MCP_TIMEOUT_MS (default 60000).
+- Deps added: @bitget-ai/bitget-signal 1.2.0 (skills bundle, installer never run), @modelcontextprotocol/sdk 1.31.0, zod 4.6.5, tsx 4.23.15 (dev). All pinned exact.
+- Tests: node:test via tsx under `tests/market/`, run with `npm run test`. Live probe: `npm run verify:market`.
+- No database, auth, or API routes beyond market context yet.
 - AGENTS.md expects Drizzle if a database is added (generate + migrate, never push).
 
 ## Decisions made

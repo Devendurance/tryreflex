@@ -52,6 +52,15 @@
 - When using sub-agents to implement features, act as a coordinator only.
 - After completing features, whether large or small, always run commands such as lint, type check, and next build to check code quality.
 
+## BACKEND
+
+- The market-context slice sources data only from two allowlisted public MCP servers: `https://agent.bitget.com/mcp` for US-stock quotes/history via `do_query` catalog entries, `https://datahub.noxiaohao.com/mcp` for crypto sentiment via direct tools. User input must never select arbitrary tool endpoints or URLs. Future slices may add their own integrations deliberately.
+- Use `@modelcontextprotocol/sdk` `Client` + `StreamableHTTPClientTransport`. No manual SSE parsing. One bounded session per operation, closed in `finally`.
+- Server-only code lives in `src/server/`. Domain logic in `src/server/market/`, MCP adapters in `src/server/integrations/bitget/`. Never import `src/server/` from client components.
+- No mock data and no synthetic market values. If a provider fails, return an honest unavailable status with a fixed safe message. Never pass `fetchedAt` off as `observedAt`, never invent currency or timestamps.
+- Never run the `bitget-signal` host installer (`scripts/install.js`). It writes to `~/.claude`, `~/.codex`, `~/.openclaw`. Plain `npm install` is safe because the package ships no lifecycle scripts.
+- Validate all external input with zod at the boundary. Reject unknown keys.
+
 ## DATABASE SCHEMA CHANGES
 
 - Whenever you make changes to the database schema, ALWAYS run the Drizzle generate and migrate commands.
