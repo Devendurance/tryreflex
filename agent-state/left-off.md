@@ -3,25 +3,23 @@
 Last updated: 2026-10-07
 
 ## Just finished
-- Implemented the authenticated decision slice after checkpoint 2b35d06.
-- Added official `@neondatabase/auth` Managed Better Auth adapter with server-only catch-all proxy and external-subject to Reflex-user mapping.
-- Added `/api/decisions/parse`, `/api/decisions/:id`, `/confirm`, and `/context`.
-- Parse creates owner-scoped drafts, preserves exact raw input, calls the existing Groq boundary, stores inference/origins/source/evidence rows, and records AI metadata.
-- Confirm creates the canonical snapshot, keeps exact repeat confirmation idempotent, and appends changed confirmations as revisions.
-- Context reuses existing market providers and writes only available normalized facts, provenance, and market evidence. Unavailable providers produce 503 with no snapshot.
-- Checkpoint suites passed 48 market, 65 persistence, and 55 AI tests. The final focused decision/auth suite passed 11. Type-check, lint, and build passed.
-- Production verification with configured Neon Auth returned `200 null` for an unauthenticated session and `401` for decision parse. No durable rows were created.
+- Trade attachment + first autopsy code checkpoint after fce32f8. No frontend/AgentKey/DNA/playbook/stress test.
+- Added official Bitget SDK3.3.1, readOnlytrue/history-only USDT/USDC futures adapter, explicit bounded selected import, account owner binding and dedupe. Manual trade attachment requires genuine fields and confirmed owned snapshot, symbol mismatch needs audit reason.
+- Added POST /api/trades/manual, POST /api/trades/import, POST /api/reviews/generate, GET /api/reviews/:id.
+- lead-authored review-policy.ts has exact decimal metrics, weights25/20/25/15/15, approved70 threshold, unscored sparse evidence, no quadrant for open/unknown/break-even. Autopsy validates owned IDs/exact quotes, stores facts separately from inferences, uses original confirmed snapshot, saves review/dimensions/links atomically.
+- REAL managed auth sessions:two succeeded with no Console changes, real Groq parse/confirm/read/owner404/idempotency/rawimmutability passed inside Neon rollback. Zero verification decision/revision/origin/source/AI rows remained.
+- Public market reprobe allUPSTREAM_UNAVAILABLE. Private Bitget last7daysUSDT-FUTURES/historypage20 failed BitgetApiError/code400. No successful account history or real trade imported.
+- Full241tests passed, focused62 passed after trivial final plumbing/test changes, typecheck/lint/build passed. Fresh production HTTP smoke:anon401/inaccessible404/invalidmanual400/privateunbound503.
+- Artifacts C:/Users/USER/bitget-mcp-discovery/log-{authenticated-decisions-live,autopsy-market,bitget-private-live,autopsy-live,autopsy-http-smoke,autopsy-testall,autopsy-typecheck,autopsy-lint,autopsy-build}.txt.
 
-## Currently working on
-- Nothing in flight. Slice implementation is complete, but signed-in Neon Auth and successful Bitget context are not claimed.
+## Current status
+- Implementation checkpoint ready; REAL autopsy proof blocked. No genuine trade supplied, no real Groq review/quality/quadrant claimed. No durable verification app rows/demo data. Original schema/migration/market/Groq/Jina/decision code retained apart from shared safe persistence error additions.
 
-## Next up
-- Run the authenticated parse -> confirm -> read -> context flow with a real Neon Auth session if one is supplied. Do not create fake users or commit credentials.
-- Then build genuine trade attachment and evidence-backed autopsy in separate invocations.
+## Next action
+- Supply an actual trade and original decision rationale or resolve Bitget private read400 and configure trusted BITGET_ACCOUNT_AUTH_SUBJECT.
+- Run verify:autopsy <private-session-file> <genuine-trade-file>. No trade fabrication. Then advance DNA/playbook in a fresh invocation.
 
-## Known issues
-- No real signed-in Neon Auth test session was available, so live authenticated Groq, Neon draft, confirmation, and context rows remain unverified.
-- Bitget market failures last observed 2026-10-07 ~14:25 UTC, not re-probed this slice. Success shapes remain unverified.
-- Historical npm audit: 9 findings (4 moderate, 5 high), not remediated.
-- No git remote. Commit checkpoint, no push. STATE remains uncommitted, docs/architecture.md and public/brand preserved.
-- Existing dev server on 3001 and foreign port 3000 were untouched. Isolated production verification server on 3002 was stopped.
+## Open items
+- Three real managed test accounts remain, including one from initial script failure. Cleanup only after approval through official Auth API, never directneon_auth edits.
+- No remote, no push. STATE uncommitted, docs/architecture.md/public/brand preserved. Historical npm audit9findings unremediated.
+- Fresh production server3002 is running PID20616/shell65b206. Reuse, ports3000/3001 untouched.

@@ -67,6 +67,11 @@
 - AI checks: `npm run test:ai` for focused tests, `npm run verify:ai` for real Groq/Jina/Neon verification. The live verifier uses temporary transaction-scoped identities/entities and always rolls back. These identities must never be used by application routes.
 - Neon Auth uses the official `@neondatabase/auth` Managed Better Auth server SDK, with both `NEON_AUTH_BASE_URL` and a 32+ character `NEON_AUTH_COOKIE_SECRET`. Keep the catch-all auth proxy server-only and map the external subject to an idempotent generated Reflex user. Never accept a caller-supplied Reflex user id.
 - Authenticated API handlers return 401 for an absent session and 503 for missing/unavailable auth configuration. No fake session or application user is allowed in runtime routes.
+- Server-global Bitget credentials may be used only for the trusted Neon subject configured in `BITGET_ACCOUNT_AUTH_SUBJECT`. Never auto-bind a verification account or expose the private account to every authenticated user. SDK reads use readOnly true, paperTrading false, a fixed production URL and a bounded position-history page.
+- Trade attachment requires the owned original confirmed snapshot. Symbol mismatches require an explicit recorded override. Imported aggregate position timestamps are not fill timestamps. Unknown fees must remain unknown even though the SQL column defaults to zero.
+- Autopsy policy lives in `src/server/review-policy.ts`: exact decimal metrics, versioned weights and the user-approved 70-point threshold. Missing evidence means no dimension score, no overall score when any dimension is unassessed, and no quadrant for open/unknown/break-even outcomes. Scores and weights are product assumptions.
+- Process evidence excludes realized PnL and exit-price outcomes, never promotes unconfirmed AI origin explanations into observed facts, and excludes post-entry market context. Read APIs keep observed quotes separate from inferred findings. Evidence-reference validation does not guarantee all semantic conclusions.
+- Verification: `test:autopsy`, `verify:authenticated-decisions`, `verify:bitget-trades`, and `verify:autopsy`. The latter requires genuine user-provided trade input plus real managed session cookies supplied via a private external file, always rolls back application rows, and never fabricates a trade when inputs are missing.
 
 ## DATABASE SCHEMA CHANGES
 

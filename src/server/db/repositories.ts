@@ -41,6 +41,38 @@ export class RepositoryError extends Error {
   }
 }
 
+export class PersistenceUnavailableError extends Error {
+  constructor() {
+    super("persistence is unavailable");
+    this.name = "PersistenceUnavailableError";
+  }
+}
+
+export class PersistenceError extends Error {
+  constructor() {
+    super("the record could not be saved");
+    this.name = "PersistenceError";
+  }
+}
+
+const DOMAIN_ERRORS = new Set([
+  "RepositoryError",
+  "TradeError",
+  "AIError",
+  "ZodError",
+  "PersistenceUnavailableError",
+  "PersistenceError",
+]);
+
+export function isDomainError(error: unknown): boolean {
+  return error instanceof Error && DOMAIN_ERRORS.has(error.name);
+}
+
+export function mapPersistenceError(error: unknown): never {
+  if (isDomainError(error)) throw error;
+  throw new PersistenceUnavailableError();
+}
+
 type Row = Record<string, unknown>;
 
 const applyInferenceSchema = z.strictObject({
