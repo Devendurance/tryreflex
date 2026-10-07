@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { validateAuthContext, type AuthContext } from "../auth/context";
 import type { DbSession, Queryable } from "./client";
@@ -12,6 +13,8 @@ import {
   appendTradeEventSchema,
   assertNonSecretConfig,
   computeSourceHash,
+  httpUrlSchema,
+  jsonObjectSchema,
   decisionSnapshotSchema,
   draftDecisionSchema,
   linkDimensionEvidenceSchema,
@@ -39,6 +42,35 @@ export class RepositoryError extends Error {
 }
 
 type Row = Record<string, unknown>;
+
+const applyInferenceSchema = z.strictObject({
+  structuredInference: jsonObjectSchema,
+  assetSymbol: z.string().nullable(),
+  assetClass: z.enum(["crypto", "rtoken", "stock", "other"]).nullable(),
+  side: z.enum(["long", "short", "watch"]).nullable(),
+  origins: z.array(
+    z.strictObject({
+      label: z.enum(["original_research", "borrowed_conviction", "social_confirmation", "pure_impulse"]),
+      explanation: z.string().min(1),
+      confidence: z.number().finite().min(0).max(1),
+      observedInputFacts: z.array(z.string().min(1)),
+    }),
+  ).max(4),
+  evidenceQuotes: z.array(z.string().min(1)).max(10),
+  sources: z.array(
+    z.strictObject({
+      sourceType: z.enum(["news", "x", "telegram", "discord", "analyst", "friend", "research", "other"]),
+      label: z.string().min(1),
+      url: httpUrlSchema.nullable(),
+      note: z.string().nullable(),
+    }),
+  ).max(10),
+});
+
+const contextEvidenceSchema = z.strictObject({
+  snapshot: appendMarketSnapshotSchema,
+  evidenceLabels: z.array(z.string().min(1)).min(1).max(10),
+});
 
 function toValidationError(error: unknown): never {
   if (error instanceof Error) {
@@ -134,6 +166,44 @@ export function createRepositories(db: DbSession, auth: AuthContext) {
         [userId, d.rawInput, d.structuredInference ?? null, d.assetSymbol ?? null, d.assetClass ?? null, d.side ?? null],
       );
     },
+    async applyInference(id: string, input: unknown): Promise<Row> {
+      const parsed = applyInferenceSchema.safeParse(input);
+      if (!parsed.success) toValidationError(parsed.error);
+      const d = parsed.data;
+      return db.transaction(async (tx) => {
+        const locked = await tx.query<Row>(
+          `SELECT * FROM public.decisions WHERE user_id=$1 AND id=$2 FOR UPDATE`,
+          [userId, id],
+        );
+        const decision = locked.rows[0];
+        if (!decision) throw new RepositoryError("decision not found", "NOT_FOUND");
+        if (decision.status !== "draft") throw new RepositoryError("only draft decisions can receive inference", "CONFLICT");
+        const updated = await tx.query<Row>(
+          `UPDATE public.decisions SET structured_inference=$3, asset_symbol=$4, asset_class=$5, side=$6 WHERE user_id=$1 AND id=$2 AND status='draft' RETURNING *`,
+          [userId, id, d.structuredInference, d.assetSymbol, d.assetClass, d.side],
+        );
+        if (!updated.rows[0]) throw new RepositoryError("decision inference could not be saved", "CONFLICT");
+        for (const origin of d.origins) {
+          await tx.query(
+            `INSERT INTO public.decision_origins (user_id,decision_id,label,explanation,confidence,basis) VALUES($1,$2,$3,$4,$5,'inference')`,
+            [userId, id, origin.label, origin.explanation, origin.confidence],
+          );
+        }
+        for (const quote of d.evidenceQuotes) {
+          await tx.query(
+            `INSERT INTO public.evidence_records (user_id,kind,decision_id,label,observed_at) VALUES($1,'user_input',$2,$3,now())`,
+            [userId, id, quote],
+          );
+        }
+        for (const source of d.sources) {
+          await tx.query(
+            `INSERT INTO public.decision_sources (user_id,decision_id,source_type,label,url,note) VALUES($1,$2,$3,$4,$5,$6)`,
+            [userId, id, source.sourceType, source.label, source.url, source.note],
+          );
+        }
+        return updated.rows[0];
+      });
+    },
     async confirm(id: string, canonicalSnapshot: unknown): Promise<Row> {
       const parsed = decisionSnapshotSchema.safeParse(canonicalSnapshot);
       if (!parsed.success) toValidationError(parsed.error);
@@ -145,21 +215,34 @@ export function createRepositories(db: DbSession, auth: AuthContext) {
         );
         const decision = locked.rows[0];
         if (!decision) throw new RepositoryError("decision not found", "NOT_FOUND");
-        if (decision.status !== "draft") {
-          throw new RepositoryError("only draft decisions can be confirmed", "CONFLICT");
+        if (decision.status === "confirmed" || decision.status === "closed") {
+          if (decision.confirmed_snapshot === null || decision.confirmed_snapshot === undefined) {
+            throw new RepositoryError("confirmed decision has no canonical snapshot", "CONFLICT");
+          }
+          if (isDeepStrictEqual(decision.confirmed_snapshot, snapshot)) {
+            return { ...decision, idempotent: true };
+          }
+          const versionResult = await tx.query<{ version: number }>(
+            `SELECT COALESCE(MAX(version),0)+1 AS version FROM public.decision_revisions WHERE user_id=$1 AND decision_id=$2`,
+            [userId, id],
+          );
+          const inserted = await tx.query<Row>(
+            `INSERT INTO public.decision_revisions (user_id,decision_id,version,snapshot,reason) VALUES($1,$2,$3,$4,$5) RETURNING *`,
+            [userId, id, versionResult.rows[0].version, snapshot, "user correction"],
+          );
+          return { ...decision, revision: inserted.rows[0], idempotent: false };
         }
+        if (decision.status !== "draft") throw new RepositoryError("only draft decisions can be confirmed", "CONFLICT");
         const updated = await tx.query<Row>(
           `UPDATE public.decisions SET status='confirmed', confirmed_snapshot=$3, confirmed_at=now(), asset_symbol=$4, asset_class=$5, side=$6 WHERE user_id=$1 AND id=$2 AND status='draft' RETURNING *`,
           [userId, id, snapshot, snapshot.assetSymbol, snapshot.assetClass, snapshot.side],
         );
-        if (updated.rows.length === 0) {
-          throw new RepositoryError("decision could not be confirmed", "CONFLICT");
-        }
-        await tx.query(
-          `INSERT INTO public.decision_revisions (user_id,decision_id,version,snapshot,reason) VALUES($1,$2,1,$3,$4)`,
+        if (updated.rows.length === 0) throw new RepositoryError("decision could not be confirmed", "CONFLICT");
+        const revision = await tx.query<Row>(
+          `INSERT INTO public.decision_revisions (user_id,decision_id,version,snapshot,reason) VALUES($1,$2,1,$3,$4) RETURNING *`,
           [userId, id, snapshot, "confirmed"],
         );
-        return updated.rows[0];
+        return { ...updated.rows[0], revision: revision.rows[0], idempotent: false };
       });
     },
     async appendRevision(id: string, input: unknown): Promise<Row> {
@@ -193,6 +276,13 @@ export function createRepositories(db: DbSession, auth: AuthContext) {
   const decisionOrigins = {
     get: (id: string) => getOwned<Row>(db, "decision_origins", userId, id),
     list: (limit = 100) => listOwned<Row>(db, "decision_origins", userId, limit),
+    listForDecision: async (decisionId: string) => {
+      const result = await db.query<Row>(
+        `SELECT * FROM public.decision_origins WHERE user_id=$1 AND decision_id=$2 ORDER BY created_at ASC, id ASC`,
+        [userId, decisionId],
+      );
+      return result.rows;
+    },
     async append(input: unknown): Promise<Row> {
       const parsed = appendOriginSchema.safeParse(input);
       if (!parsed.success) toValidationError(parsed.error);
@@ -209,6 +299,13 @@ export function createRepositories(db: DbSession, auth: AuthContext) {
   const decisionSources = {
     get: (id: string) => getOwned<Row>(db, "decision_sources", userId, id),
     list: (limit = 100) => listOwned<Row>(db, "decision_sources", userId, limit),
+    listForDecision: async (decisionId: string) => {
+      const result = await db.query<Row>(
+        `SELECT * FROM public.decision_sources WHERE user_id=$1 AND decision_id=$2 ORDER BY created_at ASC, id ASC`,
+        [userId, decisionId],
+      );
+      return result.rows;
+    },
     async append(input: unknown): Promise<Row> {
       const parsed = appendSourceSchema.safeParse(input);
       if (!parsed.success) toValidationError(parsed.error);
@@ -255,6 +352,58 @@ export function createRepositories(db: DbSession, auth: AuthContext) {
           d.regime ?? null,
         ],
       );
+    },
+    listForDecision: async (decisionId: string) => {
+      const result = await db.query<Row>(
+        `SELECT * FROM public.market_context_snapshots WHERE user_id=$1 AND decision_id=$2 ORDER BY captured_at ASC, id ASC`,
+        [userId, decisionId],
+      );
+      return result.rows;
+    },
+    async appendWithEvidence(input: unknown): Promise<{ snapshot: Row; evidence: Row[] }> {
+      const parsed = contextEvidenceSchema.safeParse(input);
+      if (!parsed.success) toValidationError(parsed.error);
+      const { snapshot, evidenceLabels } = parsed.data;
+      return db.transaction(async (tx) => {
+        const insertedSnapshot = await insertOwned<Row>(
+          tx,
+          "market_context_snapshots",
+          [
+            "user_id",
+            "decision_id",
+            "captured_at",
+            "provider",
+            "observed_facts",
+            "ai_inference",
+            "provenance",
+            "native_market_state",
+            "regime",
+          ],
+          [
+            userId,
+            snapshot.decisionId,
+            snapshot.capturedAt,
+            snapshot.provider,
+            snapshot.observedFacts,
+            snapshot.aiInference ?? null,
+            snapshot.provenance,
+            snapshot.nativeMarketState ?? null,
+            snapshot.regime ?? null,
+          ],
+        );
+        const evidence: Row[] = [];
+        for (const label of evidenceLabels) {
+          evidence.push(
+            await insertOwned<Row>(
+              tx,
+              "evidence_records",
+              ["user_id", "kind", "context_snapshot_id", "label", "observed_at"],
+              [userId, "market_data", insertedSnapshot.id, label, snapshot.capturedAt],
+            ),
+          );
+        }
+        return { snapshot: insertedSnapshot, evidence };
+      });
     },
   };
 
@@ -669,6 +818,13 @@ export function createRepositories(db: DbSession, auth: AuthContext) {
   const decisionRevisions = {
     get: (id: string) => getOwned<Row>(db, "decision_revisions", userId, id),
     list: (limit = 100) => listOwned<Row>(db, "decision_revisions", userId, limit),
+    listForDecision: async (decisionId: string) => {
+      const result = await db.query<Row>(
+        `SELECT * FROM public.decision_revisions WHERE user_id=$1 AND decision_id=$2 ORDER BY version ASC`,
+        [userId, decisionId],
+      );
+      return result.rows;
+    },
   };
 
   const patternEvidence = {

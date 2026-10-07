@@ -65,6 +65,8 @@
 - Jina document embeddings use `retrieval.passage`, queries use `retrieval.query`. Preserve source text/hash and provider metadata, check owned entity references, and dedupe before paid embedding calls.
 - Groq requires an authenticated-user-scoped `ai_runs` recorder. Provider/timestamps/attempts live in `token_usage.run`, normalized counts in `token_usage.usage`. Store safe failure categories only, never prompts, credentials, raw provider bodies, or hidden reasoning.
 - AI checks: `npm run test:ai` for focused tests, `npm run verify:ai` for real Groq/Jina/Neon verification. The live verifier uses temporary transaction-scoped identities/entities and always rolls back. These identities must never be used by application routes.
+- Neon Auth uses the official `@neondatabase/auth` Managed Better Auth server SDK, with both `NEON_AUTH_BASE_URL` and a 32+ character `NEON_AUTH_COOKIE_SECRET`. Keep the catch-all auth proxy server-only and map the external subject to an idempotent generated Reflex user. Never accept a caller-supplied Reflex user id.
+- Authenticated API handlers return 401 for an absent session and 503 for missing/unavailable auth configuration. No fake session or application user is allowed in runtime routes.
 
 ## DATABASE SCHEMA CHANGES
 

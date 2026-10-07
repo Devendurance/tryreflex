@@ -28,7 +28,7 @@ function isJsonValue(value: unknown, seen: Set<unknown>, depth: number): boolean
   return ok;
 }
 
-const jsonObjectSchema = z
+export const jsonObjectSchema = z
   .record(z.string(), z.unknown())
   .refine((value) => isJsonValue(value, new Set(), 0), {
     message: "must be a plain JSON-serializable object",

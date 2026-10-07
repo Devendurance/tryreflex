@@ -4,6 +4,8 @@ export interface AuthContext {
   readonly userId: string;
   readonly provider: string;
   readonly subject: string;
+  readonly externalAuthUserId?: string;
+  readonly email?: string;
 }
 
 export interface AuthProvider {
@@ -24,6 +26,13 @@ export class UnauthenticatedError extends Error {
   }
 }
 
+export class AuthProviderUnavailableError extends Error {
+  constructor() {
+    super("authentication provider is unavailable");
+    this.name = "AuthProviderUnavailableError";
+  }
+}
+
 export function validateAuthContext(context: AuthContext): AuthContext {
   if (
     typeof context.userId !== "string" ||
@@ -35,7 +44,22 @@ export function validateAuthContext(context: AuthContext): AuthContext {
   ) {
     throw new UnauthenticatedError();
   }
-  return Object.freeze({ userId: context.userId, provider: context.provider, subject: context.subject });
+  if (
+    context.externalAuthUserId !== undefined &&
+    (typeof context.externalAuthUserId !== "string" || context.externalAuthUserId.trim().length === 0)
+  ) {
+    throw new UnauthenticatedError();
+  }
+  if (context.email !== undefined && (typeof context.email !== "string" || context.email.trim().length === 0)) {
+    throw new UnauthenticatedError();
+  }
+  return Object.freeze({
+    userId: context.userId,
+    provider: context.provider,
+    subject: context.subject,
+    ...(context.externalAuthUserId === undefined ? {} : { externalAuthUserId: context.externalAuthUserId }),
+    ...(context.email === undefined ? {} : { email: context.email }),
+  });
 }
 
 export async function requireAuth(provider?: AuthProvider): Promise<AuthContext> {

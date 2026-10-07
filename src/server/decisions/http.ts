@@ -1,0 +1,263 @@
+import { z } from "zod";
+import { AIError } from "../ai/errors";
+import type { LLMProvider } from "../ai/types";
+import {
+  AuthNotConfiguredError,
+  AuthProviderUnavailableError,
+  requireAuth,
+  UnauthenticatedError,
+  type AuthProvider,
+} from "../auth/context";
+import { NeonAuthProvider } from "../auth/neon";
+import type { DbSession } from "../db/client";
+import { createSession } from "../db/client";
+import { RepositoryError, createRepositories } from "../db/repositories";
+import { GroqLLMProvider } from "../ai/groq";
+import { marketContextResponseSchema, marketRequestSchema, type MarketRequest } from "../market/schemas";
+import { getMarketContext, type MarketContextResult } from "../market/service";
+import { decisionSnapshotSchema } from "../db/validation";
+import { buildDecisionView, marketRequestForDecision, parseDecision } from "./service";
+
+const MAX_PARSE_BODY_BYTES = 40000;
+const MAX_CONFIRM_BODY_BYTES = 20000;
+const MAX_CONTEXT_BODY_BYTES = 4096;
+const UUID_SCHEMA = z.string().uuid();
+const contextBodySchema = z.strictObject({
+  startTime: z.number().safe().int().nonnegative().optional(),
+  endTime: z.number().safe().int().nonnegative().optional(),
+});
+
+export interface DecisionRouteDeps {
+  authProvider?: AuthProvider;
+  db?: DbSession;
+  llm?: LLMProvider;
+  market?: (request: MarketRequest) => Promise<MarketContextResult>;
+}
+
+type RouteContext = {
+  repos: ReturnType<typeof createRepositories>;
+  llm: LLMProvider;
+  market: (request: MarketRequest) => Promise<MarketContextResult>;
+};
+
+export class RequestBodyTooLargeError extends Error {}
+
+const RESPONSE_HEADERS = {
+  "content-type": "application/json",
+  "cache-control": "no-store",
+} as const;
+
+export function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: RESPONSE_HEADERS });
+}
+
+async function readJson(request: Request, maxBytes: number): Promise<unknown> {
+  if (request.body === null) throw new Error("invalid request body");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new RequestBodyTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (chunks.length === 0) return {};
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error("invalid JSON");
+  }
+}
+
+function errorResponse(error: unknown): Response {
+  if (error instanceof RequestBodyTooLargeError) {
+    return jsonResponse(413, { error: { code: "PAYLOAD_TOO_LARGE", message: "request body is too large" } });
+  }
+  if (error instanceof z.ZodError) {
+    return jsonResponse(400, { error: { code: "INVALID_REQUEST", message: "request failed validation" } });
+  }
+  if (error instanceof UnauthenticatedError) {
+    return jsonResponse(401, { error: { code: "UNAUTHORIZED", message: "authentication is required" } });
+  }
+  if (error instanceof AuthNotConfiguredError) {
+    return jsonResponse(503, { error: { code: "AUTH_NOT_CONFIGURED", message: "authentication provider is not configured" } });
+  }
+  if (error instanceof AuthProviderUnavailableError) {
+    return jsonResponse(503, { error: { code: "AUTH_UNAVAILABLE", message: "authentication provider is unavailable" } });
+  }
+  if (error instanceof RepositoryError) {
+    const response =
+      error.code === "NOT_FOUND" ? 404 : error.code === "CONFLICT" ? 409 : error.code === "CONFIGURATION" ? 503 : 400;
+    return jsonResponse(response, {
+      error: {
+        code: error.code === "NOT_FOUND" ? "NOT_FOUND" : error.code === "CONFLICT" ? "CONFLICT" : "INVALID_REQUEST",
+        message:
+          error.code === "NOT_FOUND"
+            ? "decision not found"
+            : error.code === "CONFLICT"
+              ? "decision state does not allow this operation"
+              : error.code === "CONFIGURATION"
+                ? "persistence is not configured"
+                : "request failed validation",
+      },
+    });
+  }
+  if (error instanceof AIError) {
+    const response = error.code === "SCHEMA" ? 400 : error.code === "GROUNDING" ? 422 : 503;
+    return jsonResponse(response, {
+      error: {
+        code: error.code === "SCHEMA" ? "INVALID_REQUEST" : error.code === "GROUNDING" ? "UNSUPPORTED_INFERENCE" : "AI_UNAVAILABLE",
+        message:
+          error.code === "SCHEMA"
+            ? "request failed validation"
+            : error.code === "GROUNDING"
+              ? "inference was not grounded in the supplied input"
+              : "AI provider is unavailable",
+      },
+    });
+  }
+  return jsonResponse(500, { error: { code: "INTERNAL_ERROR", message: "request could not be completed" } });
+}
+
+async function getRouteContext(deps: DecisionRouteDeps, useLlm: boolean): Promise<RouteContext> {
+  const auth = await requireAuth(deps.authProvider ?? new NeonAuthProvider({ db: deps.db }));
+  const db = deps.db ?? createSession();
+  const repos = createRepositories(db, auth);
+  await repos.users.provision();
+  return {
+    repos,
+    llm: deps.llm ?? (useLlm ? new GroqLLMProvider({ recorder: repos.aiRuns }) : (undefined as never)),
+    market: deps.market ?? getMarketContext,
+  };
+}
+
+export function createParseHandler(deps: DecisionRouteDeps = {}) {
+  return async function POST(request: Request): Promise<Response> {
+    try {
+      const body = await readJson(request, MAX_PARSE_BODY_BYTES);
+      const context = await getRouteContext(deps, true);
+      return jsonResponse(201, await parseDecision(context.repos, context.llm, body));
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
+}
+
+export function createConfirmHandler(deps: DecisionRouteDeps = {}) {
+  return async function POST(request: Request, params: { id: string }): Promise<Response> {
+    try {
+      const id = UUID_SCHEMA.parse(params.id);
+      const body = await readJson(request, MAX_CONFIRM_BODY_BYTES);
+      const snapshot = decisionSnapshotSchema.parse(body);
+      const { repos } = await getRouteContext(deps, false);
+      const decision = await repos.decisions.confirm(id, snapshot);
+      return jsonResponse(200, {
+        decision: {
+          id: decision.id,
+          status: decision.status,
+          rawInput: decision.raw_input,
+          confirmedSnapshot: decision.confirmed_snapshot ?? snapshot,
+          revision: decision.revision ?? null,
+          idempotent: decision.idempotent ?? false,
+        },
+      });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
+}
+
+export function createGetHandler(deps: DecisionRouteDeps = {}) {
+  return async function GET(_request: Request, params: { id: string }): Promise<Response> {
+    try {
+      const id = UUID_SCHEMA.parse(params.id);
+      const { repos } = await getRouteContext(deps, false);
+      const decision = await repos.decisions.get(id);
+      if (!decision) throw new RepositoryError("decision not found", "NOT_FOUND");
+      const [revisions, origins, sources, contexts] = await Promise.all([
+        repos.decisionRevisions.listForDecision(id),
+        repos.decisionOrigins.listForDecision(id),
+        repos.decisionSources.listForDecision(id),
+        repos.marketContextSnapshots.listForDecision(id),
+      ]);
+      return jsonResponse(200, {
+        decision: buildDecisionView(decision, revisions),
+        origins,
+        sources,
+        marketContextSnapshots: contexts,
+        revisions: revisions.map((revision) => ({ id: revision.id, version: revision.version, createdAt: revision.created_at })),
+      });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
+}
+
+function contextFacts(result: MarketContextResult): { observedFacts: Record<string, unknown>; provenance: Record<string, unknown>; evidenceLabels: string[]; provider: string } {
+  const observedComponents: Record<string, unknown> = {};
+  const provenanceComponents: Record<string, unknown> = {};
+  const evidenceLabels: string[] = [];
+  const providers = new Set<string>();
+  for (const [name, component] of Object.entries(result.components)) {
+    if (component.status !== "available") continue;
+    observedComponents[name] = component.data;
+    provenanceComponents[name] = component.provenance;
+    providers.add(component.provenance.provider);
+    evidenceLabels.push(`${name}:${component.provenance.provider}:${component.provenance.tool}`);
+  }
+  return {
+    observedFacts: { assetClass: result.assetClass, ...(result.symbol === undefined ? {} : { symbol: result.symbol }), capturedAt: result.capturedAt, status: result.status, components: observedComponents },
+    provenance: { provider: [...providers], components: provenanceComponents },
+    evidenceLabels,
+    provider: [...providers].join(","),
+  };
+}
+
+export function createContextHandler(deps: DecisionRouteDeps = {}) {
+  return async function POST(request: Request, params: { id: string }): Promise<Response> {
+    try {
+      const id = UUID_SCHEMA.parse(params.id);
+      const body = contextBodySchema.parse(await readJson(request, MAX_CONTEXT_BODY_BYTES));
+      const { repos, market } = await getRouteContext(deps, false);
+      const decision = await repos.decisions.get(id);
+      if (!decision) throw new RepositoryError("decision not found", "NOT_FOUND");
+      if (decision.status !== "confirmed" && decision.status !== "closed") {
+        throw new RepositoryError("decision must be confirmed before context capture", "CONFLICT");
+      }
+      const marketRequest = marketRequestSchema.parse(marketRequestForDecision(decision, body));
+      const result = marketContextResponseSchema.parse(await market(marketRequest));
+      if (result.status === "unavailable") {
+        return jsonResponse(503, { error: { code: "UPSTREAM_UNAVAILABLE", message: "market provider is unavailable" } });
+      }
+      const facts = contextFacts(result);
+      const persisted = await repos.marketContextSnapshots.appendWithEvidence({
+        snapshot: {
+          decisionId: id,
+          capturedAt: result.capturedAt,
+          provider: facts.provider,
+          observedFacts: facts.observedFacts,
+          provenance: facts.provenance,
+        },
+        evidenceLabels: facts.evidenceLabels,
+      });
+      return jsonResponse(201, { snapshot: persisted.snapshot, evidence: persisted.evidence, status: result.status });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
+}
