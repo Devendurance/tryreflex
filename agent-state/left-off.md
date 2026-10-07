@@ -3,6 +3,7 @@
 Last updated: 2026-10-07
 
 ## Just finished
+- Bitget Agentic first-time setup (mechanical, no OAuth). Official agentic skill copied verbatim from @bitget-ai/bitget-agent-skill3.3.1 into .devin/skills/bitget-agentic (payload metadata version1.3.0, no reference files ship with agentic). Global npm @bitget-ai/bitget-agent-mcp@3.3.1 installed. SDK loadConfig reads BITGET_* env first and throws on partial auth before OAuth disk fallback; inherited BITGET_API_KEY exists, so .devin/mcp_config.json launches bitget-agentic via cmd /d /s /c that set-empties all three BITGET_* names in the child only, then npx -y @bitget-ai/bitget-agent-mcp@3.3.1. Saved user vars/Reflex env untouched. Also has agentkey (unchanged) and public bitget-mcp-server HTTP https://agent.bitget.com/mcp. Smoke through the configured command/args passed: server3.3.1, 17 tools, names/schema only, server closed. No authorize call made.
 - Sparse retail evidence + provider diagnosis/context boundary checkpoint after5ec3d29. No frontend/DNA/playbook/stress test/extra chains.
 - Migration0001_supreme_squadron_supreme applied to real Neon: manual nullable execution fields, strict conditional Bitget check. Old0000 unchanged. Isolated constraint fixtures rolled back0users/decisions/trades.
 - Manual inputs support actual invested/proceeds/caps/fees/currencies and nullable prices/quantities/times. MC movement never becomes realized ROI/PnL; cash-flow basis and currency are explicit. Original snapshot not contaminated by retrospective comments/untimed peaks. Parserv2 + sparseautopsyv2 prompts authored.
@@ -13,10 +14,12 @@ Last updated: 2026-10-07
 - Full274tests passed; last affected sparse36 and decisionroutes8 passed; latesttypecheck/lint/build passed. Native anonymousmanual401 and real-session all-nullmanual400.
 
 ## Current status
+- Bitget Agentic pre-OAuth first registration is complete and pending a new session: invoke the bitget-agentic skill, confirm native MCP tools loaded, then authorize_start with original authorizeBaseUrl https://www.bitget.careers. The user acts in the browser; success means status authorized plus credentials saved client-local. No authorize call has been made.
 - Code checkpoint ready; full requested REAL autopsy remains blocked. No actual token/contract/values/rationale/trade file supplied, no genuine Groq origin/review/quality/quadrant claimed. Only source type is known.
 - New AgentKey connector is partial integration, not a successful business data call. No verified canonical operation or runtime read plan yet.
 
 ## Next action
+- FIRST: in a new session, invoke bitget-agentic and run the OAuth flow (authorize_start, open authorizeUrl via Bash, authorize_wait with the returned sessionId). Then confirm get_auth_status authorized.
 - Provide genuine private JSON with original rationale and remembered observations. Unknown execution fields may be null. Retrospective comments stay in trade.retrospectiveComments, not snapshot.
 - Fix AgentKey master-key401 and select an actual discovered/described relevant read tool. Fix Bitget credential environment40099 before history. Keep safety binding intact.
 - Run verify:autopsy <private-session-file> <genuine-trade-file>, inspect genuine evidence and rollback. Then DNA/playbook in a fresh invocation.

@@ -3,6 +3,14 @@
     "agentkey": {
       "url": "https://api.agentkey.app/v1/mcp",
       "transport": "http"
+    },
+    "bitget-agentic": {
+      "command": "cmd",
+      "args": ["/d", "/s", "/c", "set \"BITGET_API_KEY=\" && set \"BITGET_SECRET_KEY=\" && set \"BITGET_PASSPHRASE=\" && npx -y @bitget-ai/bitget-agent-mcp@3.3.1"]
+    },
+    "bitget-mcp-server": {
+      "url": "https://agent.bitget.com/mcp",
+      "transport": "http"
     }
   }
 }
