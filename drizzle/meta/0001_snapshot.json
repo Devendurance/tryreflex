@@ -1,0 +1,2755 @@
+{
+  "id": "88c90deb-e15c-4b30-8bc7-4498df93f881",
+  "prevId": "486fedf3-4612-4f09-8286-290c28985016",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.decision_origins": {
+      "name": "decision_origins",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_id": {
+          "name": "decision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "origin_label",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "explanation": {
+          "name": "explanation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "numeric(5, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "basis": {
+          "name": "basis",
+          "type": "origin_basis",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "decision_origins_user_id_users_id_fk": {
+          "name": "decision_origins_user_id_users_id_fk",
+          "tableFrom": "decision_origins",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "decision_origins_decision_fk": {
+          "name": "decision_origins_decision_fk",
+          "tableFrom": "decision_origins",
+          "tableTo": "decisions",
+          "columnsFrom": [
+            "user_id",
+            "decision_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "decision_origins_user_id_id_unique": {
+          "name": "decision_origins_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "decision_origins_label_basis_unique": {
+          "name": "decision_origins_label_basis_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "decision_id",
+            "label",
+            "basis"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "decision_origins_confidence_range": {
+          "name": "decision_origins_confidence_range",
+          "value": "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.decision_revisions": {
+      "name": "decision_revisions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_id": {
+          "name": "decision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot": {
+          "name": "snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "decision_revisions_user_id_users_id_fk": {
+          "name": "decision_revisions_user_id_users_id_fk",
+          "tableFrom": "decision_revisions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "decision_revisions_decision_fk": {
+          "name": "decision_revisions_decision_fk",
+          "tableFrom": "decision_revisions",
+          "tableTo": "decisions",
+          "columnsFrom": [
+            "user_id",
+            "decision_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "decision_revisions_user_id_id_unique": {
+          "name": "decision_revisions_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "decision_revisions_version_unique": {
+          "name": "decision_revisions_version_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "decision_id",
+            "version"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "decision_revisions_version_positive": {
+          "name": "decision_revisions_version_positive",
+          "value": "version > 0"
+        },
+        "decision_revisions_snapshot_object": {
+          "name": "decision_revisions_snapshot_object",
+          "value": "jsonb_typeof(snapshot) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.decision_sources": {
+      "name": "decision_sources",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_id": {
+          "name": "decision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_type": {
+          "name": "source_type",
+          "type": "source_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "captured_at": {
+          "name": "captured_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "decision_sources_user_id_users_id_fk": {
+          "name": "decision_sources_user_id_users_id_fk",
+          "tableFrom": "decision_sources",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "decision_sources_decision_fk": {
+          "name": "decision_sources_decision_fk",
+          "tableFrom": "decision_sources",
+          "tableTo": "decisions",
+          "columnsFrom": [
+            "user_id",
+            "decision_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "decision_sources_user_id_id_unique": {
+          "name": "decision_sources_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.decisions": {
+      "name": "decisions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "raw_input": {
+          "name": "raw_input",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "structured_inference": {
+          "name": "structured_inference",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "confirmed_snapshot": {
+          "name": "confirmed_snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "asset_symbol": {
+          "name": "asset_symbol",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "asset_class": {
+          "name": "asset_class",
+          "type": "asset_class",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "side": {
+          "name": "side",
+          "type": "decision_side",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "decision_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "confirmed_at": {
+          "name": "confirmed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "decisions_user_id_users_id_fk": {
+          "name": "decisions_user_id_users_id_fk",
+          "tableFrom": "decisions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "decisions_user_id_id_unique": {
+          "name": "decisions_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "decisions_raw_input_nonempty": {
+          "name": "decisions_raw_input_nonempty",
+          "value": "btrim(raw_input) <> ''"
+        },
+        "decisions_status_snapshot_check": {
+          "name": "decisions_status_snapshot_check",
+          "value": "(status = 'draft' AND confirmed_snapshot IS NULL AND confirmed_at IS NULL) OR (status IN ('confirmed','closed') AND confirmed_snapshot IS NOT NULL AND confirmed_at IS NOT NULL)"
+        },
+        "decisions_confirmed_snapshot_object": {
+          "name": "decisions_confirmed_snapshot_object",
+          "value": "confirmed_snapshot IS NULL OR jsonb_typeof(confirmed_snapshot) = 'object'"
+        },
+        "decisions_structured_inference_object": {
+          "name": "decisions_structured_inference_object",
+          "value": "structured_inference IS NULL OR jsonb_typeof(structured_inference) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.market_context_snapshots": {
+      "name": "market_context_snapshots",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_id": {
+          "name": "decision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "captured_at": {
+          "name": "captured_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observed_facts": {
+          "name": "observed_facts",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ai_inference": {
+          "name": "ai_inference",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provenance": {
+          "name": "provenance",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "native_market_state": {
+          "name": "native_market_state",
+          "type": "native_market_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "regime": {
+          "name": "regime",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "market_context_snapshots_user_id_users_id_fk": {
+          "name": "market_context_snapshots_user_id_users_id_fk",
+          "tableFrom": "market_context_snapshots",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "market_context_snapshots_decision_fk": {
+          "name": "market_context_snapshots_decision_fk",
+          "tableFrom": "market_context_snapshots",
+          "tableTo": "decisions",
+          "columnsFrom": [
+            "user_id",
+            "decision_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "market_context_snapshots_user_id_id_unique": {
+          "name": "market_context_snapshots_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "mcs_observed_facts_object": {
+          "name": "mcs_observed_facts_object",
+          "value": "jsonb_typeof(observed_facts) = 'object'"
+        },
+        "mcs_ai_inference_object": {
+          "name": "mcs_ai_inference_object",
+          "value": "ai_inference IS NULL OR jsonb_typeof(ai_inference) = 'object'"
+        },
+        "mcs_provenance_object": {
+          "name": "mcs_provenance_object",
+          "value": "jsonb_typeof(provenance) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "auth_provider": {
+          "name": "auth_provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth_subject": {
+          "name": "auth_subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_currency": {
+          "name": "base_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'USD'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "users_auth_identity_unique": {
+          "name": "users_auth_identity_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "auth_provider",
+            "auth_subject"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.review_dimensions": {
+      "name": "review_dimensions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "review_id": {
+          "name": "review_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dimension": {
+          "name": "dimension",
+          "type": "review_dimension",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "score": {
+          "name": "score",
+          "type": "numeric(5, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "explanation": {
+          "name": "explanation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "numeric(5, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "review_dimensions_user_id_users_id_fk": {
+          "name": "review_dimensions_user_id_users_id_fk",
+          "tableFrom": "review_dimensions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "review_dimensions_review_fk": {
+          "name": "review_dimensions_review_fk",
+          "tableFrom": "review_dimensions",
+          "tableTo": "reviews",
+          "columnsFrom": [
+            "user_id",
+            "review_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "review_dimensions_user_id_id_unique": {
+          "name": "review_dimensions_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "review_dimensions_review_dimension_unique": {
+          "name": "review_dimensions_review_dimension_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "review_id",
+            "dimension"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "review_dimensions_score_range": {
+          "name": "review_dimensions_score_range",
+          "value": "score IS NULL OR (score >= 0 AND score <= 100)"
+        },
+        "review_dimensions_confidence_range": {
+          "name": "review_dimensions_confidence_range",
+          "value": "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reviews": {
+      "name": "reviews",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_id": {
+          "name": "decision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trade_id": {
+          "name": "trade_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_current": {
+          "name": "is_current",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "process_classification": {
+          "name": "process_classification",
+          "type": "process_classification",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "observed_metrics": {
+          "name": "observed_metrics",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ai_inference": {
+          "name": "ai_inference",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "reviews_current_unique": {
+          "name": "reviews_current_unique",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "trade_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "is_current",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "reviews_user_id_users_id_fk": {
+          "name": "reviews_user_id_users_id_fk",
+          "tableFrom": "reviews",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "reviews_trade_fk": {
+          "name": "reviews_trade_fk",
+          "tableFrom": "reviews",
+          "tableTo": "trades",
+          "columnsFrom": [
+            "user_id",
+            "trade_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "reviews_decision_trade_fk": {
+          "name": "reviews_decision_trade_fk",
+          "tableFrom": "reviews",
+          "tableTo": "trades",
+          "columnsFrom": [
+            "user_id",
+            "decision_id",
+            "trade_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "decision_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "reviews_user_id_id_unique": {
+          "name": "reviews_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "reviews_user_trade_version_unique": {
+          "name": "reviews_user_trade_version_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "trade_id",
+            "version"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "reviews_version_positive": {
+          "name": "reviews_version_positive",
+          "value": "version > 0"
+        },
+        "reviews_observed_metrics_object": {
+          "name": "reviews_observed_metrics_object",
+          "value": "jsonb_typeof(observed_metrics) = 'object'"
+        },
+        "reviews_ai_inference_object": {
+          "name": "reviews_ai_inference_object",
+          "value": "ai_inference IS NULL OR jsonb_typeof(ai_inference) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.trade_events": {
+      "name": "trade_events",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trade_id": {
+          "name": "trade_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "trade_event_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "facts": {
+          "name": "facts",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "trade_events_user_id_users_id_fk": {
+          "name": "trade_events_user_id_users_id_fk",
+          "tableFrom": "trade_events",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "trade_events_trade_fk": {
+          "name": "trade_events_trade_fk",
+          "tableFrom": "trade_events",
+          "tableTo": "trades",
+          "columnsFrom": [
+            "user_id",
+            "trade_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "trade_events_user_id_id_unique": {
+          "name": "trade_events_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "trade_events_facts_object": {
+          "name": "trade_events_facts_object",
+          "value": "jsonb_typeof(facts) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.trades": {
+      "name": "trades",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_id": {
+          "name": "decision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "trade_provider",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_id": {
+          "name": "external_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "symbol": {
+          "name": "symbol",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "side": {
+          "name": "side",
+          "type": "trade_side",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quantity": {
+          "name": "quantity",
+          "type": "numeric(30, 12)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "entry_price": {
+          "name": "entry_price",
+          "type": "numeric(30, 12)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "exit_price": {
+          "name": "exit_price",
+          "type": "numeric(30, 12)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fees": {
+          "name": "fees",
+          "type": "numeric(30, 12)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "realized_pnl": {
+          "name": "realized_pnl",
+          "type": "numeric(30, 12)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "opened_at": {
+          "name": "opened_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "trades_external_id_unique": {
+          "name": "trades_external_id_unique",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "external_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "external_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "trades_user_id_users_id_fk": {
+          "name": "trades_user_id_users_id_fk",
+          "tableFrom": "trades",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "trades_decision_fk": {
+          "name": "trades_decision_fk",
+          "tableFrom": "trades",
+          "tableTo": "decisions",
+          "columnsFrom": [
+            "user_id",
+            "decision_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "trades_user_id_id_unique": {
+          "name": "trades_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "trades_user_decision_id_unique": {
+          "name": "trades_user_decision_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "decision_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "trades_quantity_positive": {
+          "name": "trades_quantity_positive",
+          "value": "quantity > 0"
+        },
+        "trades_entry_price_positive": {
+          "name": "trades_entry_price_positive",
+          "value": "entry_price > 0"
+        },
+        "trades_exit_price_positive": {
+          "name": "trades_exit_price_positive",
+          "value": "exit_price IS NULL OR exit_price > 0"
+        },
+        "trades_fees_nonnegative": {
+          "name": "trades_fees_nonnegative",
+          "value": "fees >= 0"
+        },
+        "trades_closed_after_open": {
+          "name": "trades_closed_after_open",
+          "value": "closed_at IS NULL OR closed_at >= opened_at"
+        },
+        "trades_bitget_execution_required": {
+          "name": "trades_bitget_execution_required",
+          "value": "provider <> 'bitget' OR (quantity IS NOT NULL AND entry_price IS NOT NULL AND opened_at IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.patterns": {
+      "name": "patterns",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "pattern_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "pattern_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observed_statistics": {
+          "name": "observed_statistics",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ai_inference": {
+          "name": "ai_inference",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "evidence_count": {
+          "name": "evidence_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "numeric(5, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "patterns_user_id_users_id_fk": {
+          "name": "patterns_user_id_users_id_fk",
+          "tableFrom": "patterns",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "patterns_user_id_id_unique": {
+          "name": "patterns_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "patterns_evidence_count_nonnegative": {
+          "name": "patterns_evidence_count_nonnegative",
+          "value": "evidence_count >= 0"
+        },
+        "patterns_confidence_range": {
+          "name": "patterns_confidence_range",
+          "value": "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)"
+        },
+        "patterns_observed_statistics_object": {
+          "name": "patterns_observed_statistics_object",
+          "value": "jsonb_typeof(observed_statistics) = 'object'"
+        },
+        "patterns_ai_inference_object": {
+          "name": "patterns_ai_inference_object",
+          "value": "ai_inference IS NULL OR jsonb_typeof(ai_inference) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.playbook_rules": {
+      "name": "playbook_rules",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "previous_rule_id": {
+          "name": "previous_rule_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_pattern_id": {
+          "name": "source_pattern_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "rule_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trigger": {
+          "name": "trigger",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rule_text": {
+          "name": "rule_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rationale": {
+          "name": "rationale",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_decision": {
+          "name": "user_decision",
+          "type": "rule_user_decision",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "playbook_rules_user_id_users_id_fk": {
+          "name": "playbook_rules_user_id_users_id_fk",
+          "tableFrom": "playbook_rules",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "playbook_rules_previous_fk": {
+          "name": "playbook_rules_previous_fk",
+          "tableFrom": "playbook_rules",
+          "tableTo": "playbook_rules",
+          "columnsFrom": [
+            "user_id",
+            "previous_rule_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "playbook_rules_pattern_fk": {
+          "name": "playbook_rules_pattern_fk",
+          "tableFrom": "playbook_rules",
+          "tableTo": "patterns",
+          "columnsFrom": [
+            "user_id",
+            "source_pattern_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "playbook_rules_user_id_id_unique": {
+          "name": "playbook_rules_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "playbook_rules_version_unique": {
+          "name": "playbook_rules_version_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "version"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "playbook_rules_version_positive": {
+          "name": "playbook_rules_version_positive",
+          "value": "version > 0"
+        },
+        "playbook_rules_status_decision_check": {
+          "name": "playbook_rules_status_decision_check",
+          "value": "(status = 'proposed' AND user_decision IS NULL AND decided_at IS NULL) OR (status = 'active' AND user_decision IS NOT NULL AND user_decision = 'accepted' AND decided_at IS NOT NULL) OR (status = 'rejected' AND user_decision IS NOT NULL AND user_decision = 'rejected' AND decided_at IS NOT NULL) OR (status = 'deferred' AND user_decision IS NOT NULL AND user_decision = 'deferred' AND decided_at IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.evidence_records": {
+      "name": "evidence_records",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "evidence_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_id": {
+          "name": "decision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "context_snapshot_id": {
+          "name": "context_snapshot_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "trade_id": {
+          "name": "trade_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_id": {
+          "name": "source_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "review_id": {
+          "name": "review_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rule_id": {
+          "name": "rule_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "observed_at": {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "evidence_records_user_id_users_id_fk": {
+          "name": "evidence_records_user_id_users_id_fk",
+          "tableFrom": "evidence_records",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "evidence_records_decision_fk": {
+          "name": "evidence_records_decision_fk",
+          "tableFrom": "evidence_records",
+          "tableTo": "decisions",
+          "columnsFrom": [
+            "user_id",
+            "decision_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "evidence_records_snapshot_fk": {
+          "name": "evidence_records_snapshot_fk",
+          "tableFrom": "evidence_records",
+          "tableTo": "market_context_snapshots",
+          "columnsFrom": [
+            "user_id",
+            "context_snapshot_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "evidence_records_trade_fk": {
+          "name": "evidence_records_trade_fk",
+          "tableFrom": "evidence_records",
+          "tableTo": "trades",
+          "columnsFrom": [
+            "user_id",
+            "trade_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "evidence_records_source_fk": {
+          "name": "evidence_records_source_fk",
+          "tableFrom": "evidence_records",
+          "tableTo": "decision_sources",
+          "columnsFrom": [
+            "user_id",
+            "source_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "evidence_records_review_fk": {
+          "name": "evidence_records_review_fk",
+          "tableFrom": "evidence_records",
+          "tableTo": "reviews",
+          "columnsFrom": [
+            "user_id",
+            "review_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "evidence_records_rule_fk": {
+          "name": "evidence_records_rule_fk",
+          "tableFrom": "evidence_records",
+          "tableTo": "playbook_rules",
+          "columnsFrom": [
+            "user_id",
+            "rule_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "evidence_records_user_id_id_unique": {
+          "name": "evidence_records_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "evidence_records_kind_reference_check": {
+          "name": "evidence_records_kind_reference_check",
+          "value": "(\n        (kind IN ('user_input','prior_decision') AND decision_id IS NOT NULL AND context_snapshot_id IS NULL AND trade_id IS NULL AND source_id IS NULL AND review_id IS NULL AND rule_id IS NULL) OR\n        (kind = 'market_data' AND context_snapshot_id IS NOT NULL AND decision_id IS NULL AND trade_id IS NULL AND source_id IS NULL AND review_id IS NULL AND rule_id IS NULL) OR\n        (kind = 'trade_data' AND trade_id IS NOT NULL AND decision_id IS NULL AND context_snapshot_id IS NULL AND source_id IS NULL AND review_id IS NULL AND rule_id IS NULL) OR\n        (kind = 'source' AND source_id IS NOT NULL AND decision_id IS NULL AND context_snapshot_id IS NULL AND trade_id IS NULL AND review_id IS NULL AND rule_id IS NULL) OR\n        (kind = 'prior_review' AND review_id IS NOT NULL AND decision_id IS NULL AND context_snapshot_id IS NULL AND trade_id IS NULL AND source_id IS NULL AND rule_id IS NULL) OR\n        (kind = 'playbook_rule' AND rule_id IS NOT NULL AND decision_id IS NULL AND context_snapshot_id IS NULL AND trade_id IS NULL AND source_id IS NULL AND review_id IS NULL)\n      )"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.pattern_evidence": {
+      "name": "pattern_evidence",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pattern_id": {
+          "name": "pattern_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence_id": {
+          "name": "evidence_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "pattern_evidence_user_id_users_id_fk": {
+          "name": "pattern_evidence_user_id_users_id_fk",
+          "tableFrom": "pattern_evidence",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "pattern_evidence_pattern_fk": {
+          "name": "pattern_evidence_pattern_fk",
+          "tableFrom": "pattern_evidence",
+          "tableTo": "patterns",
+          "columnsFrom": [
+            "user_id",
+            "pattern_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "pattern_evidence_evidence_fk": {
+          "name": "pattern_evidence_evidence_fk",
+          "tableFrom": "pattern_evidence",
+          "tableTo": "evidence_records",
+          "columnsFrom": [
+            "user_id",
+            "evidence_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "pattern_evidence_user_id_id_unique": {
+          "name": "pattern_evidence_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "pattern_evidence_pattern_evidence_unique": {
+          "name": "pattern_evidence_pattern_evidence_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "pattern_id",
+            "evidence_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.playbook_rule_evidence": {
+      "name": "playbook_rule_evidence",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rule_id": {
+          "name": "rule_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence_id": {
+          "name": "evidence_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "playbook_rule_evidence_user_id_users_id_fk": {
+          "name": "playbook_rule_evidence_user_id_users_id_fk",
+          "tableFrom": "playbook_rule_evidence",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "playbook_rule_evidence_rule_fk": {
+          "name": "playbook_rule_evidence_rule_fk",
+          "tableFrom": "playbook_rule_evidence",
+          "tableTo": "playbook_rules",
+          "columnsFrom": [
+            "user_id",
+            "rule_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "playbook_rule_evidence_evidence_fk": {
+          "name": "playbook_rule_evidence_evidence_fk",
+          "tableFrom": "playbook_rule_evidence",
+          "tableTo": "evidence_records",
+          "columnsFrom": [
+            "user_id",
+            "evidence_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "playbook_rule_evidence_user_id_id_unique": {
+          "name": "playbook_rule_evidence_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "playbook_rule_evidence_rule_evidence_unique": {
+          "name": "playbook_rule_evidence_rule_evidence_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "rule_id",
+            "evidence_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.review_dimension_evidence": {
+      "name": "review_dimension_evidence",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dimension_id": {
+          "name": "dimension_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence_id": {
+          "name": "evidence_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "review_dimension_evidence_user_id_users_id_fk": {
+          "name": "review_dimension_evidence_user_id_users_id_fk",
+          "tableFrom": "review_dimension_evidence",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "review_dimension_evidence_dimension_fk": {
+          "name": "review_dimension_evidence_dimension_fk",
+          "tableFrom": "review_dimension_evidence",
+          "tableTo": "review_dimensions",
+          "columnsFrom": [
+            "user_id",
+            "dimension_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "review_dimension_evidence_evidence_fk": {
+          "name": "review_dimension_evidence_evidence_fk",
+          "tableFrom": "review_dimension_evidence",
+          "tableTo": "evidence_records",
+          "columnsFrom": [
+            "user_id",
+            "evidence_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "review_dimension_evidence_user_id_id_unique": {
+          "name": "review_dimension_evidence_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "review_dimension_evidence_dimension_evidence_unique": {
+          "name": "review_dimension_evidence_dimension_evidence_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "dimension_id",
+            "evidence_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.ai_runs": {
+      "name": "ai_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pipeline": {
+          "name": "pipeline",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "prompt_version": {
+          "name": "prompt_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_entity_ids": {
+          "name": "input_entity_ids",
+          "type": "uuid[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "ai_run_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "latency_ms": {
+          "name": "latency_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "token_usage": {
+          "name": "token_usage",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "validation_errors": {
+          "name": "validation_errors",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ai_runs_user_id_users_id_fk": {
+          "name": "ai_runs_user_id_users_id_fk",
+          "tableFrom": "ai_runs",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ai_runs_user_id_id_unique": {
+          "name": "ai_runs_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ai_runs_latency_nonnegative": {
+          "name": "ai_runs_latency_nonnegative",
+          "value": "latency_ms IS NULL OR latency_ms >= 0"
+        },
+        "ai_runs_token_usage_object": {
+          "name": "ai_runs_token_usage_object",
+          "value": "token_usage IS NULL OR jsonb_typeof(token_usage) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.memory_embeddings": {
+      "name": "memory_embeddings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entity_type": {
+          "name": "entity_type",
+          "type": "embedding_entity_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entity_id": {
+          "name": "entity_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_id": {
+          "name": "decision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "review_id": {
+          "name": "review_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pattern_id": {
+          "name": "pattern_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rule_id": {
+          "name": "rule_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "embedding": {
+          "name": "embedding",
+          "type": "vector(1024)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dimensions": {
+          "name": "dimensions",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_text": {
+          "name": "source_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_hash": {
+          "name": "source_hash",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "memory_embeddings_embedding_hnsw": {
+          "name": "memory_embeddings_embedding_hnsw",
+          "columns": [
+            {
+              "expression": "embedding",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last",
+              "opclass": "vector_cosine_ops"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "hnsw",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "memory_embeddings_user_id_users_id_fk": {
+          "name": "memory_embeddings_user_id_users_id_fk",
+          "tableFrom": "memory_embeddings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "memory_embeddings_decision_fk": {
+          "name": "memory_embeddings_decision_fk",
+          "tableFrom": "memory_embeddings",
+          "tableTo": "decisions",
+          "columnsFrom": [
+            "user_id",
+            "decision_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "memory_embeddings_review_fk": {
+          "name": "memory_embeddings_review_fk",
+          "tableFrom": "memory_embeddings",
+          "tableTo": "reviews",
+          "columnsFrom": [
+            "user_id",
+            "review_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "memory_embeddings_pattern_fk": {
+          "name": "memory_embeddings_pattern_fk",
+          "tableFrom": "memory_embeddings",
+          "tableTo": "patterns",
+          "columnsFrom": [
+            "user_id",
+            "pattern_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "memory_embeddings_rule_fk": {
+          "name": "memory_embeddings_rule_fk",
+          "tableFrom": "memory_embeddings",
+          "tableTo": "playbook_rules",
+          "columnsFrom": [
+            "user_id",
+            "rule_id"
+          ],
+          "columnsTo": [
+            "user_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "memory_embeddings_user_id_id_unique": {
+          "name": "memory_embeddings_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "memory_embeddings_dedupe_unique": {
+          "name": "memory_embeddings_dedupe_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "entity_type",
+            "entity_id",
+            "model",
+            "dimensions",
+            "source_hash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "memory_embeddings_entity_check": {
+          "name": "memory_embeddings_entity_check",
+          "value": "(\n        (entity_type = 'decision' AND decision_id IS NOT NULL AND decision_id = entity_id AND review_id IS NULL AND pattern_id IS NULL AND rule_id IS NULL) OR\n        (entity_type = 'review' AND review_id IS NOT NULL AND review_id = entity_id AND decision_id IS NULL AND pattern_id IS NULL AND rule_id IS NULL) OR\n        (entity_type = 'pattern' AND pattern_id IS NOT NULL AND pattern_id = entity_id AND decision_id IS NULL AND review_id IS NULL AND rule_id IS NULL) OR\n        (entity_type = 'rule' AND rule_id IS NOT NULL AND rule_id = entity_id AND decision_id IS NULL AND review_id IS NULL AND pattern_id IS NULL)\n      )"
+        },
+        "memory_embeddings_nonzero_norm": {
+          "name": "memory_embeddings_nonzero_norm",
+          "value": "vector_norm(embedding) > 0"
+        },
+        "memory_embeddings_model_check": {
+          "name": "memory_embeddings_model_check",
+          "value": "model = 'jina-embeddings-v5-text-small'"
+        },
+        "memory_embeddings_dimensions_check": {
+          "name": "memory_embeddings_dimensions_check",
+          "value": "dimensions = 1024"
+        },
+        "memory_embeddings_source_hash_hex": {
+          "name": "memory_embeddings_source_hash_hex",
+          "value": "source_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "memory_embeddings_metadata_object": {
+          "name": "memory_embeddings_metadata_object",
+          "value": "jsonb_typeof(metadata) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.provider_connections": {
+      "name": "provider_connections",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "provider_connection_provider",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_subject": {
+          "name": "external_subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "provider_connection_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "config": {
+          "name": "config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "provider_connections_user_id_users_id_fk": {
+          "name": "provider_connections_user_id_users_id_fk",
+          "tableFrom": "provider_connections",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "provider_connections_user_id_id_unique": {
+          "name": "provider_connections_user_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "id"
+          ]
+        },
+        "provider_connections_user_provider_unique": {
+          "name": "provider_connections_user_provider_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "provider"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "provider_connections_config_object": {
+          "name": "provider_connections_config_object",
+          "value": "jsonb_typeof(config) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.asset_class": {
+      "name": "asset_class",
+      "schema": "public",
+      "values": [
+        "crypto",
+        "rtoken",
+        "stock",
+        "other"
+      ]
+    },
+    "public.decision_side": {
+      "name": "decision_side",
+      "schema": "public",
+      "values": [
+        "long",
+        "short",
+        "watch"
+      ]
+    },
+    "public.decision_status": {
+      "name": "decision_status",
+      "schema": "public",
+      "values": [
+        "draft",
+        "confirmed",
+        "closed"
+      ]
+    },
+    "public.native_market_state": {
+      "name": "native_market_state",
+      "schema": "public",
+      "values": [
+        "open",
+        "closed",
+        "unknown"
+      ]
+    },
+    "public.origin_basis": {
+      "name": "origin_basis",
+      "schema": "public",
+      "values": [
+        "inference",
+        "user_confirmed"
+      ]
+    },
+    "public.origin_label": {
+      "name": "origin_label",
+      "schema": "public",
+      "values": [
+        "original_research",
+        "borrowed_conviction",
+        "social_confirmation",
+        "pure_impulse"
+      ]
+    },
+    "public.source_type": {
+      "name": "source_type",
+      "schema": "public",
+      "values": [
+        "news",
+        "x",
+        "telegram",
+        "discord",
+        "analyst",
+        "friend",
+        "research",
+        "other"
+      ]
+    },
+    "public.process_classification": {
+      "name": "process_classification",
+      "schema": "public",
+      "values": [
+        "earned_win",
+        "good_decision_bad_outcome",
+        "lucky_escape",
+        "deserved_loss"
+      ]
+    },
+    "public.review_dimension": {
+      "name": "review_dimension",
+      "schema": "public",
+      "values": [
+        "research_quality",
+        "context_awareness",
+        "risk_discipline",
+        "execution_quality",
+        "behavioral_control"
+      ]
+    },
+    "public.trade_event_type": {
+      "name": "trade_event_type",
+      "schema": "public",
+      "values": [
+        "entry",
+        "exit",
+        "add",
+        "reduce",
+        "fee",
+        "other"
+      ]
+    },
+    "public.trade_provider": {
+      "name": "trade_provider",
+      "schema": "public",
+      "values": [
+        "bitget",
+        "manual"
+      ]
+    },
+    "public.trade_side": {
+      "name": "trade_side",
+      "schema": "public",
+      "values": [
+        "long",
+        "short"
+      ]
+    },
+    "public.pattern_kind": {
+      "name": "pattern_kind",
+      "schema": "public",
+      "values": [
+        "edge",
+        "leak",
+        "influence",
+        "regime",
+        "timing"
+      ]
+    },
+    "public.pattern_status": {
+      "name": "pattern_status",
+      "schema": "public",
+      "values": [
+        "observation",
+        "emerging",
+        "established"
+      ]
+    },
+    "public.rule_status": {
+      "name": "rule_status",
+      "schema": "public",
+      "values": [
+        "proposed",
+        "active",
+        "rejected",
+        "deferred"
+      ]
+    },
+    "public.rule_user_decision": {
+      "name": "rule_user_decision",
+      "schema": "public",
+      "values": [
+        "accepted",
+        "rejected",
+        "deferred"
+      ]
+    },
+    "public.evidence_kind": {
+      "name": "evidence_kind",
+      "schema": "public",
+      "values": [
+        "user_input",
+        "market_data",
+        "trade_data",
+        "source",
+        "prior_decision",
+        "prior_review",
+        "playbook_rule"
+      ]
+    },
+    "public.ai_run_status": {
+      "name": "ai_run_status",
+      "schema": "public",
+      "values": [
+        "pending",
+        "success",
+        "failed"
+      ]
+    },
+    "public.embedding_entity_type": {
+      "name": "embedding_entity_type",
+      "schema": "public",
+      "values": [
+        "decision",
+        "review",
+        "pattern",
+        "rule"
+      ]
+    },
+    "public.provider_connection_provider": {
+      "name": "provider_connection_provider",
+      "schema": "public",
+      "values": [
+        "bitget",
+        "groq",
+        "jina",
+        "agentkey"
+      ]
+    },
+    "public.provider_connection_status": {
+      "name": "provider_connection_status",
+      "schema": "public",
+      "values": [
+        "configured",
+        "connected",
+        "unavailable",
+        "revoked"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

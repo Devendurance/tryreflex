@@ -129,6 +129,133 @@ export function computeTradeMetrics(trade: TradeMetricInput, decision: DecisionM
   };
 }
 
+export interface SparseManualMetricInput {
+  quantity: string | null;
+  entryPrice: string | null;
+  exitPrice: string | null;
+  side: "long" | "short";
+  openedAt: Date | string | null;
+  closedAt: Date | string | null;
+  executionState: "open" | "closed" | "unknown";
+  fees: string | null;
+  netRealizedPnl: string | null;
+  amountInvested: string | null;
+  proceedsReceived: string | null;
+  cashFlowBasis: "gross_excluding_fees" | "net_including_fees" | "unknown";
+  settlementCurrency: string | null;
+  entryMarketCap: string | null;
+  exitMarketCap: string | null;
+  peakObservedMarketCap: string | null;
+  intendedTakeProfitMarketCap: string | null;
+  marketCapCurrency: string | null;
+  captureBasis: "contemporaneous" | "retrospective" | "unknown";
+}
+
+export function computeSparseManualMetrics(trade: SparseManualMetricInput, decision: DecisionMetricInput) {
+  if (!["open", "closed", "unknown"].includes(trade.executionState)) throw new Error("invalid sparse execution state");
+  if (!["gross_excluding_fees", "net_including_fees", "unknown"].includes(trade.cashFlowBasis)) throw new Error("invalid sparse cash-flow basis");
+  if (!["contemporaneous", "retrospective", "unknown"].includes(trade.captureBasis)) throw new Error("invalid sparse capture basis");
+  const positive = (value: string | null): bigint | null => {
+    if (value === null) return null;
+    const parsed = decimalUnits(value);
+    if (parsed <= BigInt(0)) throw new Error("invalid sparse positive value");
+    return parsed;
+  };
+  const nonnegative = (value: string | null): bigint | null => {
+    if (value === null) return null;
+    const parsed = decimalUnits(value);
+    if (parsed < BigInt(0)) throw new Error("invalid sparse nonnegative value");
+    return parsed;
+  };
+  const quantity = positive(trade.quantity);
+  const entry = positive(trade.entryPrice);
+  const exit = positive(trade.exitPrice);
+  const invested = positive(trade.amountInvested);
+  const proceeds = nonnegative(trade.proceedsReceived);
+  const fees = nonnegative(trade.fees);
+  const entryCap = positive(trade.entryMarketCap);
+  const exitCap = positive(trade.exitMarketCap);
+  const peakCap = positive(trade.peakObservedMarketCap);
+  const targetCap = positive(trade.intendedTakeProfitMarketCap);
+  const openedMs = trade.openedAt === null ? null : timeMs(trade.openedAt);
+  const closedMs = trade.closedAt === null ? null : timeMs(trade.closedAt);
+  if (openedMs !== null && closedMs !== null && closedMs < openedMs) throw new Error("invalid sparse chronology");
+  const confirmedMs = timeMs(decision.confirmedAt);
+  const isClosed = trade.executionState === "closed";
+  const hasCash = invested !== null && proceeds !== null && trade.settlementCurrency !== null;
+  const hasExecution = quantity !== null && entry !== null && exit !== null && trade.settlementCurrency !== null;
+  const executionGross = isClosed && hasExecution
+    ? (trade.side === "long" ? exit! - entry! : entry! - exit!) * quantity!
+    : null;
+  const cashGross = isClosed && hasCash && trade.cashFlowBasis === "gross_excluding_fees"
+    ? (proceeds! - invested!) * SCALE
+    : null;
+  let netUnits: bigint | null = null;
+  let netPnlBasis = "unavailable";
+  if (isClosed && trade.netRealizedPnl !== null && (hasExecution || hasCash)) {
+    netUnits = decimalUnits(trade.netRealizedPnl) * SCALE;
+    netPnlBasis = "supplied_net";
+  } else if (isClosed && hasCash && trade.cashFlowBasis === "net_including_fees") {
+    netUnits = (proceeds! - invested!) * SCALE;
+    netPnlBasis = "actual_net_cashflows";
+  } else if (cashGross !== null && fees !== null) {
+    netUnits = cashGross - fees * SCALE;
+    netPnlBasis = "actual_gross_cashflows_less_fees";
+  } else if (executionGross !== null && fees !== null) {
+    netUnits = executionGross - fees * SCALE;
+    netPnlBasis = "computed_linear_net";
+  }
+  const netPnl = netUnits === null ? null : formatDecimal(roundedDivide(netUnits, SCALE));
+  const outcome = netUnits === null || (netUnits !== BigInt(0) && netPnl === "0")
+    ? "unknown"
+    : netUnits > BigInt(0) ? "positive" : netUnits < BigInt(0) ? "negative" : "break_even";
+  const notional = quantity !== null && entry !== null ? quantity * entry : null;
+  const returnDenominator = hasCash && invested !== null && (netPnlBasis.startsWith("actual_") || notional === null) ? invested * SCALE : notional;
+  const ratio = (numerator: bigint | null, denominator: bigint | null): string | null =>
+    numerator === null || denominator === null ? null : formatDecimal(roundedDivide(numerator * SCALE, denominator));
+  return {
+    version: "trade-metrics.v2",
+    calculationBasis: "manual_observations",
+    rounding: "12 decimal places, half away from zero",
+    executionState: trade.executionState,
+    quantity: trade.quantity,
+    entryPrice: trade.entryPrice,
+    exitPrice: trade.exitPrice,
+    amountInvested: trade.amountInvested,
+    proceedsReceived: trade.proceedsReceived,
+    cashFlowBasis: trade.cashFlowBasis,
+    settlementCurrency: trade.settlementCurrency,
+    entryNotional: notional === null ? null : formatDecimal(roundedDivide(notional, SCALE)),
+    grossPnl: cashGross !== null ? formatDecimal(roundedDivide(cashGross, SCALE)) : executionGross === null ? null : formatDecimal(roundedDivide(executionGross, SCALE)),
+    netRealizedPnl: netPnl,
+    netPnlBasis,
+    netReturnPct: netUnits === null || returnDenominator === null ? null : formatDecimal(roundedDivide(netUnits * BigInt(100) * SCALE, returnDenominator)),
+    fees: trade.fees,
+    holdingDurationMs: openedMs === null || closedMs === null ? null : closedMs - openedMs,
+    entryAfterConfirmationMs: openedMs === null ? null : openedMs - confirmedMs,
+    captureTiming: trade.captureBasis === "retrospective" ? "retrospective" : openedMs === null ? "unknown" : openedMs < confirmedMs ? "retrospective" : "pre_entry",
+    entryVsPlannedPct: null,
+    entryMarketCap: trade.entryMarketCap,
+    exitMarketCap: trade.exitMarketCap,
+    peakObservedMarketCap: trade.peakObservedMarketCap,
+    intendedTakeProfitMarketCap: trade.intendedTakeProfitMarketCap,
+    marketCapCurrency: trade.marketCapCurrency,
+    marketCapMovementMultiple: trade.marketCapCurrency === null ? null : ratio(exitCap, entryCap),
+    peakMarketCapMovementMultiple: trade.marketCapCurrency === null ? null : ratio(peakCap, entryCap),
+    exitVsTargetMarketCapMultiple: trade.marketCapCurrency === null ? null : ratio(exitCap, targetCap),
+    marketCapMetricMeaning: "market-cap movement only, not realized trading return",
+    intendedVsActualRisk: null,
+    sourceTimingDeltaMs: null,
+    movementBeforeEntry: null,
+    invalidationBreach: null,
+    reentryTimingMs: null,
+    nativeMarketState: null,
+    outcome,
+  };
+}
+
+export const SPARSE_AUTOPSY_PROMPT_VERSION = "decision-autopsy.v2";
+
 export function computeDecisionQuality(scores: Readonly<Record<ReviewDimension, number | null>>) {
   let weightedHundredths = 0;
   let assessedWeight = 0;
@@ -170,3 +297,11 @@ Research quality concerns explicit independent research, thesis, catalyst and so
 If captureTiming is retrospective, the snapshot records the user's later account of beliefs rather than proving contemporaneous pre-entry planning. Say so where relevant. Never use current/post-entry market context as evidence of what was known before entry. Never reward positive PnL or punish negative PnL through process scores. Never choose an overall score, threshold, or process/outcome quadrant; the server computes those separately.
 
 Do not diagnose addiction, mental illness, compulsive disorders, or psychological conditions. Do not infer revenge trading, ignored invalidation, size/risk violations, timing patterns or repeated behavior without specific supporting records. Do not promise returns or make a trading recommendation. Provide concise product-safe rationale, not hidden chain of thought. Every lesson must contain text and evidenceRefs backed by supplied evidence. Return only the schema-defined JSON.`;
+
+export const SPARSE_AUTOPSY_SYSTEM_PROMPT = `${AUTOPSY_SYSTEM_PROMPT}
+
+Additional sparse retail evidence rules: Manual recollections can describe amount invested, actual proceeds, and entry/exit market capitalization without a token unit price, quantity, or exact time. Market capitalization is a valuation observation, not an execution price. A market-cap movement multiple is not realized return or realized PnL. Never estimate financial outcome from it. Unknown financial outcome remains unknown even if market capitalization rose or fell.
+
+Evidence marked retrospective may explain what the trader remembers afterward, including a later observed peak. It cannot prove what they knew when deciding or justify hindsight-based process penalties. Original decision evidence and retrospective comments must remain separate. A take-profit market-cap target counts as a plan only if it exists in the original confirmed snapshot and its knowledge basis is stated; an unconfirmed later recollection must not be promoted into the original plan. Unknown timing cannot establish late entry, re-entry, contemporaneous research, market regime, or decision-time news exposure.
+
+AgentKey context is secondary/fallback context with its own underlying source, query, and retrieval time. Current enrichment is not historical decision-time evidence. Never claim it was supplied by Bitget or known at entry. You may explicitly say verified decision-time context is unavailable. Keep findings specific to the supplied evidence rather than generic slogans. A peak market-cap value without proven timing does not show that the peak occurred while the position was held, that a take-profit could have executed, or that the user ignored the plan. Unsupported dimensions must abstain. Do not force a favorable or unfavorable overall score or quadrant.`;

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "./config";
+import { decimalUnits } from "../review-policy";
 
 const MAX_JSON_DEPTH = 20;
 
@@ -82,6 +83,16 @@ export const decisionSnapshotSchema = z.strictObject({
   catalyst: z.string().optional(),
   confidence: finiteNumber.min(0).max(1).optional(),
   intendedEntry: finiteNumber.positive().optional(),
+  intendedTakeProfitMarketCap: z
+    .string()
+    .regex(/^\d{1,18}(\.\d{1,12})?$/)
+    .refine((v) => /^\d{1,18}(\.\d{1,12})?$/.test(v) && decimalUnits(v) > BigInt(0))
+    .optional(),
+  marketCapCurrency: z
+    .string()
+    .regex(/^[A-Z][A-Z0-9]{1,11}$/)
+    .optional(),
+  knowledgeBasis: z.enum(["contemporaneous_record", "retrospective_recollection", "unknown"]).optional(),
   invalidation: z.string().optional(),
   intendedRiskPct: finiteNumber.min(0).max(100).optional(),
   timeframe: z.string().optional(),

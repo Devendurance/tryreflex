@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { AuthContext } from "../auth/context";
-import { computeTradeMetrics, decimalUnits } from "../review-policy";
+import { computeSparseManualMetrics, decimalUnits } from "../review-policy";
 import { TradeError } from "./errors";
 import { tradeHistoryQuerySchema, type TradeProvider } from "./provider";
 import type { AttachTradeInput, AttachTradeResult, createTradeRepository } from "./repository";
@@ -9,6 +9,7 @@ type TradeRepository = ReturnType<typeof createTradeRepository>;
 
 const DECIMAL_PATTERN = /^-?\d{1,18}(\.\d{1,12})?$/;
 const SYMBOL_PATTERN = /^[A-Z][A-Z0-9._-]{0,29}$/;
+const CURRENCY_PATTERN = /^[A-Z][A-Z0-9]{1,11}$/;
 const isoOffset = z.iso.datetime({ offset: true });
 
 const positiveDecimal = z
@@ -20,36 +21,75 @@ const positiveDecimal = z
   );
 const nonnegativeDecimal = z.string().regex(DECIMAL_PATTERN).refine((v) => !v.startsWith("-"));
 const signedDecimal = z.string().regex(DECIMAL_PATTERN);
+const currencyCode = z.string().regex(CURRENCY_PATTERN);
+const nonblank = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .refine((v) => v.trim().length > 0);
 
-const manualTradeSchema = z
+export const manualTradeInputSchema = z
   .strictObject({
     decisionId: z.string().uuid(),
     symbol: z.string().transform((v) => v.trim().toUpperCase()).pipe(z.string().regex(SYMBOL_PATTERN)),
     side: z.enum(["long", "short"]),
-    quantity: positiveDecimal,
-    entryPrice: positiveDecimal,
-    exitPrice: positiveDecimal.optional(),
-    fees: nonnegativeDecimal.optional(),
-    realizedPnl: signedDecimal.optional(),
-    openedAt: isoOffset,
-    closedAt: isoOffset.optional(),
-    settlementCurrency: z.enum(["USD", "USDT", "USDC"]),
-    symbolOverrideReason: z
-      .string()
-      .min(1)
-      .max(1000)
-      .refine((v) => v.trim().length > 0)
-      .optional(),
+    quantity: positiveDecimal.nullish(),
+    entryPrice: positiveDecimal.nullish(),
+    exitPrice: positiveDecimal.nullish(),
+    openedAt: isoOffset.nullish(),
+    closedAt: isoOffset.nullish(),
+    fees: nonnegativeDecimal.nullish(),
+    realizedPnl: signedDecimal.nullish(),
+    settlementCurrency: currencyCode.nullish(),
+    executionState: z.enum(["open", "closed", "unknown"]).nullish(),
+    amountInvested: positiveDecimal.nullish(),
+    proceedsReceived: nonnegativeDecimal.nullish(),
+    entryMarketCap: positiveDecimal.nullish(),
+    exitMarketCap: positiveDecimal.nullish(),
+    peakObservedMarketCap: positiveDecimal.nullish(),
+    marketCapCurrency: currencyCode.nullish(),
+    cashFlowBasis: z.enum(["gross_excluding_fees", "net_including_fees", "unknown"]).nullish(),
+    captureBasis: z.enum(["contemporaneous", "retrospective", "unknown"]).nullish(),
+    retrospectiveComments: nonblank(4000).nullish(),
+    contractAddress: nonblank(200).nullish(),
+    chain: nonblank(100).nullish(),
+    symbolOverrideReason: nonblank(1000).nullish(),
   })
   .superRefine((value, ctx) => {
-    const hasExit = value.exitPrice !== undefined;
-    const hasClose = value.closedAt !== undefined;
-    if (hasExit !== hasClose) ctx.addIssue({ code: "custom" });
-    if (hasClose && Date.parse(value.closedAt!) < Date.parse(value.openedAt)) {
-      ctx.addIssue({ code: "custom" });
+    const observations = [
+      value.quantity,
+      value.entryPrice,
+      value.exitPrice,
+      value.amountInvested,
+      value.proceedsReceived,
+      value.entryMarketCap,
+      value.exitMarketCap,
+      value.peakObservedMarketCap,
+    ];
+    if (!observations.some((v) => v != null)) {
+      ctx.addIssue({ code: "custom", message: "at least one genuine observation is required" });
     }
-    if (Date.parse(value.openedAt) > Date.now()) ctx.addIssue({ code: "custom" });
-    if (hasClose && Date.parse(value.closedAt!) > Date.now()) ctx.addIssue({ code: "custom" });
+    const state = value.executionState ?? (value.closedAt != null ? "closed" : "unknown");
+    if (state !== "closed" && value.closedAt != null) {
+      ctx.addIssue({ code: "custom", message: "non-closed trade cannot carry closedAt" });
+    }
+    if (value.openedAt != null && value.closedAt != null) {
+      if (Date.parse(value.closedAt) < Date.parse(value.openedAt)) {
+        ctx.addIssue({ code: "custom", message: "closedAt precedes openedAt" });
+      }
+    }
+    for (const stamp of [value.openedAt, value.closedAt]) {
+      if (stamp != null && Date.parse(stamp) > Date.now()) {
+        ctx.addIssue({ code: "custom", message: "future timestamp" });
+      }
+    }
+    const hasCash = value.amountInvested != null && value.proceedsReceived != null;
+    const hasExecution =
+      value.quantity != null && value.entryPrice != null && value.exitPrice != null;
+    if (value.realizedPnl != null && !hasCash && !hasExecution) {
+      ctx.addIssue({ code: "custom", message: "realizedPnl requires cash-flow or execution basis" });
+    }
   });
 
 const importBodySchema = z.strictObject({
@@ -81,13 +121,14 @@ function buildAttachInput(
     externalId: string | null;
     symbol: string;
     side: "long" | "short";
-    quantity: string;
-    entryPrice: string;
+    quantity: string | null;
+    entryPrice: string | null;
     exitPrice: string | null;
     fees: string;
     realizedPnl: string | null;
-    openedAt: string;
+    openedAt: string | null;
     closedAt: string | null;
+    occurredAt: string;
   },
   facts: Record<string, unknown>,
 ): AttachTradeInput {
@@ -98,56 +139,118 @@ export async function attachManualTrade(
   repo: TradeRepository,
   input: unknown,
 ): Promise<AttachTradeResult> {
-  const parsed = manualTradeSchema.safeParse(input);
+  const parsed = manualTradeInputSchema.safeParse(input);
   if (!parsed.success) throw new TradeError("INVALID_INPUT");
   const body = parsed.data;
 
-  const isClosed = body.closedAt !== undefined;
-  const feesKnown = body.fees !== undefined;
-  let realizedPnl: string | null = body.realizedPnl ?? null;
-  let netPnlBasis = "unavailable";
-
-  if (isClosed) {
-    if (body.realizedPnl !== undefined) {
-      netPnlBasis = "supplied_net";
-    } else if (feesKnown) {
-      let metrics: ReturnType<typeof computeTradeMetrics>;
-      try {
-        metrics = computeTradeMetrics(
-          {
-          quantity: body.quantity,
-          entryPrice: body.entryPrice,
-          exitPrice: body.exitPrice ?? null,
-          side: body.side,
-          openedAt: body.openedAt,
-          closedAt: body.closedAt ?? null,
-          fees: body.fees ?? null,
-          netRealizedPnl: null,
-          calculationBasis: "linear_base_quantity",
-        },
-          { confirmedAt: new Date(0).toISOString(), intendedEntry: null },
-        );
-      } catch {
-        throw new TradeError("INVALID_INPUT");
-      }
-      const computed = metrics.netRealizedPnl;
-      if (computed === null || !DECIMAL_PATTERN.test(computed)) {
-        throw new TradeError("INVALID_INPUT");
-      }
-      realizedPnl = computed;
-      netPnlBasis = "computed_linear_net";
-    }
+  const provenanceFacts: Record<string, unknown> = {};
+  if (body.symbolOverrideReason != null) {
+    provenanceFacts.symbolOverride = {
+      kind: "symbol_override",
+      tradeSymbol: body.symbol,
+      reason: body.symbolOverrideReason,
+    };
   }
+  const decision = await repo.assertDecisionLink({
+    decisionId: body.decisionId,
+    symbol: body.symbol,
+    side: body.side,
+    provenanceFacts,
+  });
+  const snapshot =
+    decision.confirmed_snapshot !== null && typeof decision.confirmed_snapshot === "object"
+      ? (decision.confirmed_snapshot as Record<string, unknown>)
+      : {};
+  const intendedTakeProfitMarketCap =
+    typeof snapshot.intendedTakeProfitMarketCap === "string"
+      ? snapshot.intendedTakeProfitMarketCap
+      : null;
+  const snapshotCapCurrency =
+    typeof snapshot.marketCapCurrency === "string" ? snapshot.marketCapCurrency : null;
+
+  const executionState =
+    body.executionState ?? (body.closedAt != null ? "closed" : "unknown");
+  const cashFlowBasis = body.cashFlowBasis ?? "unknown";
+  const captureBasis = body.captureBasis ?? "unknown";
+  const marketCapCurrency = body.marketCapCurrency ?? null;
+  const comparableTargetCap =
+    intendedTakeProfitMarketCap !== null &&
+    snapshotCapCurrency !== null &&
+    marketCapCurrency !== null &&
+    snapshotCapCurrency === marketCapCurrency
+      ? intendedTakeProfitMarketCap
+      : null;
+  const confirmedAt =
+    typeof decision.confirmed_at === "string" || decision.confirmed_at instanceof Date
+      ? (decision.confirmed_at as string | Date)
+      : null;
+  if (confirmedAt === null) throw new TradeError("CONFLICT");
+  const receivedAt = new Date().toISOString();
+
+  let metrics: ReturnType<typeof computeSparseManualMetrics>;
+  try {
+    metrics = computeSparseManualMetrics(
+      {
+        quantity: body.quantity ?? null,
+        entryPrice: body.entryPrice ?? null,
+        exitPrice: body.exitPrice ?? null,
+        side: body.side,
+        openedAt: body.openedAt ?? null,
+        closedAt: body.closedAt ?? null,
+        executionState,
+        fees: body.fees ?? null,
+        netRealizedPnl: body.realizedPnl ?? null,
+        amountInvested: body.amountInvested ?? null,
+        proceedsReceived: body.proceedsReceived ?? null,
+        cashFlowBasis,
+        settlementCurrency: body.settlementCurrency ?? null,
+        entryMarketCap: body.entryMarketCap ?? null,
+        exitMarketCap: body.exitMarketCap ?? null,
+        peakObservedMarketCap: body.peakObservedMarketCap ?? null,
+        intendedTakeProfitMarketCap: comparableTargetCap,
+        marketCapCurrency,
+        captureBasis,
+      },
+      { confirmedAt, intendedEntry: null },
+    );
+  } catch {
+    throw new TradeError("INVALID_INPUT");
+  }
+
+  if (metrics.netRealizedPnl !== null && !DECIMAL_PATTERN.test(metrics.netRealizedPnl)) {
+    throw new TradeError("INVALID_INPUT");
+  }
+  const realizedPnl = metrics.netRealizedPnl;
+  const feesKnown = body.fees != null;
+
+  const manualObservations: Record<string, unknown> = {
+    amountInvested: body.amountInvested ?? null,
+    proceedsReceived: body.proceedsReceived ?? null,
+    entryMarketCap: body.entryMarketCap ?? null,
+    exitMarketCap: body.exitMarketCap ?? null,
+    peakObservedMarketCap: body.peakObservedMarketCap ?? null,
+    marketCapCurrency: body.marketCapCurrency ?? null,
+    settlementCurrency: body.settlementCurrency ?? null,
+    executionState,
+    cashFlowBasis,
+    captureBasis,
+    contractAddress: body.contractAddress ?? null,
+    chain: body.chain ?? null,
+    retrospectiveComments: body.retrospectiveComments ?? null,
+  };
 
   const facts: Record<string, unknown> = {
     kind: "trade_provenance",
     source: "manual",
     feesKnown,
-    settlementCurrency: body.settlementCurrency,
-    calculationBasis: "linear_base_quantity",
-    netPnlBasis,
+    settlementCurrency: body.settlementCurrency ?? null,
+    calculationBasis: "manual_observations",
+    netPnlBasis: metrics.netPnlBasis,
+    receivedAt,
+    eventTimeBasis: body.openedAt != null ? "execution_opened" : "recorded_at",
+    manualObservations,
   };
-  if (body.symbolOverrideReason !== undefined) {
+  if (body.symbolOverrideReason != null) {
     facts.symbolOverride = {
       kind: "symbol_override",
       tradeSymbol: body.symbol,
@@ -162,13 +265,14 @@ export async function attachManualTrade(
       externalId: null,
       symbol: body.symbol,
       side: body.side,
-      quantity: body.quantity,
-      entryPrice: body.entryPrice,
+      quantity: body.quantity ?? null,
+      entryPrice: body.entryPrice ?? null,
       exitPrice: body.exitPrice ?? null,
       fees: body.fees ?? "0",
       realizedPnl,
-      openedAt: body.openedAt,
+      openedAt: body.openedAt ?? null,
       closedAt: body.closedAt ?? null,
+      occurredAt: body.openedAt ?? receivedAt,
     },
     facts,
   );
@@ -238,7 +342,7 @@ export async function importSelectedTrades(
       netPnlBasis: "supplied_net",
       metadata: trade.metadata,
     };
-    if (body.symbolOverrideReason !== undefined) {
+    if (body.symbolOverrideReason != null) {
       facts.symbolOverride = {
         kind: "symbol_override",
         tradeSymbol: trade.symbol,
@@ -259,6 +363,7 @@ export async function importSelectedTrades(
         realizedPnl: trade.realizedPnl,
         openedAt: trade.openedAt,
         closedAt: trade.closedAt,
+        occurredAt: trade.openedAt,
       },
       facts,
     );

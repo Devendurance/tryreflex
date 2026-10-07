@@ -15,6 +15,11 @@ import { RepositoryError, createRepositories } from "../db/repositories";
 import { GroqLLMProvider } from "../ai/groq";
 import { marketContextResponseSchema, marketRequestSchema, type MarketRequest } from "../market/schemas";
 import { getMarketContext, type MarketContextResult } from "../market/service";
+import {
+  getDecisionContext,
+  secondaryEvidenceEntries,
+} from "../context/service";
+import type { SecondaryContextQuery, SecondaryContextResult } from "../context/schemas";
 import { decisionSnapshotSchema } from "../db/validation";
 import { buildDecisionView, marketRequestForDecision, parseDecision } from "./service";
 
@@ -25,6 +30,7 @@ const UUID_SCHEMA = z.string().uuid();
 const contextBodySchema = z.strictObject({
   startTime: z.number().safe().int().nonnegative().optional(),
   endTime: z.number().safe().int().nonnegative().optional(),
+  enrichment: z.boolean().optional(),
 });
 
 export interface DecisionRouteDeps {
@@ -32,6 +38,10 @@ export interface DecisionRouteDeps {
   db?: DbSession;
   llm?: LLMProvider;
   market?: (request: MarketRequest) => Promise<MarketContextResult>;
+  secondary?: (
+    query: SecondaryContextQuery,
+    role: "fallback" | "enrichment",
+  ) => Promise<SecondaryContextResult>;
 }
 
 type RouteContext = {
@@ -208,23 +218,49 @@ export function createGetHandler(deps: DecisionRouteDeps = {}) {
   };
 }
 
-function contextFacts(result: MarketContextResult): { observedFacts: Record<string, unknown>; provenance: Record<string, unknown>; evidenceLabels: string[]; provider: string } {
+function contextFacts(result: MarketContextResult): { observedFacts: Record<string, unknown>; provenance: Record<string, unknown>; evidenceLabels: string[]; providers: string[] } {
   const observedComponents: Record<string, unknown> = {};
   const provenanceComponents: Record<string, unknown> = {};
+  const primaryFailures: Record<string, unknown> = {};
   const evidenceLabels: string[] = [];
   const providers = new Set<string>();
   for (const [name, component] of Object.entries(result.components)) {
-    if (component.status !== "available") continue;
+    if (component.status !== "available") {
+      primaryFailures[name] = { code: component.code, message: component.message };
+      continue;
+    }
     observedComponents[name] = component.data;
-    provenanceComponents[name] = component.provenance;
+    const { evidenceId: serviceCorrelationId, ...rest } = component.provenance;
+    provenanceComponents[name] = { ...rest, serviceCorrelationId };
     providers.add(component.provenance.provider);
     evidenceLabels.push(`${name}:${component.provenance.provider}:${component.provenance.tool}`);
   }
   return {
-    observedFacts: { assetClass: result.assetClass, ...(result.symbol === undefined ? {} : { symbol: result.symbol }), capturedAt: result.capturedAt, status: result.status, components: observedComponents },
+    observedFacts: { assetClass: result.assetClass, ...(result.symbol === undefined ? {} : { symbol: result.symbol }), capturedAt: result.capturedAt, status: result.status, components: observedComponents, primaryFailures },
     provenance: { provider: [...providers], components: provenanceComponents },
     evidenceLabels,
-    provider: [...providers].join(","),
+    providers: [...providers],
+  };
+}
+
+function secondaryFacts(secondary: SecondaryContextResult | null): {
+  observedFacts: Record<string, unknown> | null;
+  provenance: Record<string, unknown>[] | null;
+  labels: string[];
+} {
+  const entries = secondaryEvidenceEntries(secondary);
+  if (entries.items.length === 0) return { observedFacts: null, provenance: null, labels: [] };
+  return {
+    observedFacts: {
+      secondary: entries.items.map((item) => ({
+        kind: item.kind,
+        text: item.text,
+        role: item.role,
+        retrievedAt: item.retrievedAt,
+      })),
+    },
+    provenance: entries.provenance,
+    labels: entries.labels,
   };
 }
 
@@ -240,22 +276,55 @@ export function createContextHandler(deps: DecisionRouteDeps = {}) {
         throw new RepositoryError("decision must be confirmed before context capture", "CONFLICT");
       }
       const marketRequest = marketRequestSchema.parse(marketRequestForDecision(decision, body));
-      const result = marketContextResponseSchema.parse(await market(marketRequest));
-      if (result.status === "unavailable") {
-        return jsonResponse(503, { error: { code: "UPSTREAM_UNAVAILABLE", message: "market provider is unavailable" } });
+      const secondaryQuery =
+        typeof decision.asset_symbol === "string" && decision.asset_symbol.trim().length > 0
+          ? { assetSymbol: decision.asset_symbol.trim().toUpperCase() }
+          : undefined;
+      const combined = await getDecisionContext(
+        {
+          ...marketRequest,
+          enrichment: body.enrichment === true,
+          ...(secondaryQuery === undefined ? {} : { secondaryQuery }),
+        },
+        { primary: market, ...(deps.secondary === undefined ? {} : { secondary: deps.secondary }) },
+      );
+      const result = marketContextResponseSchema.parse(combined.primary);
+      if (combined.status === "unavailable") {
+        return jsonResponse(503, {
+          error: { code: "UPSTREAM_UNAVAILABLE", message: "market provider is unavailable" },
+          primary: { status: result.status },
+          secondary:
+            combined.secondary === null
+              ? null
+              : {
+                  provider: combined.secondary.provider,
+                  code: combined.secondary.error?.code ?? null,
+                },
+        });
       }
       const facts = contextFacts(result);
+      const secondary = secondaryFacts(combined.secondary);
+      const providers = [...facts.providers, ...(secondary.provenance === null ? [] : ["agentkey"])];
       const persisted = await repos.marketContextSnapshots.appendWithEvidence({
         snapshot: {
           decisionId: id,
-          capturedAt: result.capturedAt,
-          provider: facts.provider,
-          observedFacts: facts.observedFacts,
-          provenance: facts.provenance,
+          capturedAt: combined.capturedAt,
+          provider: providers.join(","),
+          observedFacts: {
+            ...facts.observedFacts,
+            capturedAt: combined.capturedAt,
+            status: combined.status,
+            primaryStatus: result.status,
+            ...(secondary.observedFacts === null ? {} : secondary.observedFacts),
+          },
+          provenance: {
+            ...facts.provenance,
+            ...(secondary.provenance === null ? {} : { secondary: secondary.provenance }),
+          },
         },
-        evidenceLabels: facts.evidenceLabels,
+        evidenceLabels: [...facts.evidenceLabels, ...secondary.labels],
       });
-      return jsonResponse(201, { snapshot: persisted.snapshot, evidence: persisted.evidence, status: result.status });
+      return jsonResponse(201, { snapshot: persisted.snapshot, evidence: persisted.evidence, status: combined.status });
     } catch (error) {
       return errorResponse(error);
     }

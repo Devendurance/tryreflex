@@ -11,8 +11,11 @@ import {
   AUTOPSY_SYSTEM_PROMPT,
   REVIEW_DIMENSIONS,
   REVIEW_PROMPT_VERSION,
+  SPARSE_AUTOPSY_PROMPT_VERSION,
+  SPARSE_AUTOPSY_SYSTEM_PROMPT,
   classifyProcessOutcome,
   computeDecisionQuality,
+  computeSparseManualMetrics,
   computeTradeMetrics,
   type ReviewDimension,
 } from "../review-policy";
@@ -25,8 +28,16 @@ type Row = Record<string, unknown>;
 const MAX_CATALOG_ITEMS = 30;
 const MAX_CATALOG_CHARS = 20000;
 const METRIC_LABEL = "Deterministic process metrics trade-metrics.v1";
+const SPARSE_METRIC_LABEL = "Deterministic process metrics trade-metrics.v2";
+const SPARSE_OBSERVATIONS_LABEL = "Retrospective manual observations";
 const CLINICAL_PATTERN = /\b(addict(?:ion|ed)?|mental illness|compulsive disorder|bipolar|psychosis|psychiatric)\b/i;
 const OUTCOME_FIELDS = new Set(["grossPnl", "netRealizedPnl", "netPnlBasis", "netReturnPct", "outcome"]);
+const SPARSE_OUTCOME_FIELDS = new Set([
+  "exitPrice",
+  "amountInvested",
+  "proceedsReceived",
+  "fees",
+]);
 const PNL_WORDS = /\b(pnl|profit|loss|return)\b/i;
 
 const dimensionEntrySchema = z.strictObject({
@@ -82,9 +93,9 @@ function tradeProcessText(trade: Row): string {
     `provider: ${String(trade.provider)}`,
     `symbol: ${String(trade.symbol)}`,
     `side: ${String(trade.side)}`,
-    `quantity: ${String(trade.quantity)}`,
-    `entry_price: ${String(trade.entry_price)}`,
-    `opened_at: ${isoOf(trade.opened_at)}`,
+    trade.quantity === null ? null : `quantity: ${String(trade.quantity)}`,
+    trade.entry_price === null ? null : `entry_price: ${String(trade.entry_price)}`,
+    trade.opened_at === null ? null : `opened_at: ${isoOf(trade.opened_at)}`,
     trade.closed_at === null ? null : `closed_at: ${isoOf(trade.closed_at)}`,
   ].filter((line): line is string => line !== null);
   return lines.join("\n");
@@ -96,12 +107,44 @@ function isoOf(value: unknown): string {
   return date.toISOString();
 }
 
-function metricProcessText(metrics: Record<string, unknown>): string {
+function metricProcessText(metrics: Record<string, unknown>, sparse: boolean): string {
   const lines: string[] = [`metric_version: ${String(metrics.version)}`];
   for (const [key, value] of Object.entries(metrics)) {
     if (OUTCOME_FIELDS.has(key) || PNL_WORDS.test(key)) continue;
+    if (sparse && SPARSE_OUTCOME_FIELDS.has(key)) continue;
     if (value === null || key === "version") continue;
     lines.push(`${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`);
+  }
+  return lines.join("\n");
+}
+
+function sparseObservationsText(observations: Row): string {
+  const lines: string[] = ["phase: after_the_fact manual observations, not decision-time evidence"];
+  const fields: [string, string][] = [
+    ["execution_state", "executionState"],
+    ["cash_flow_basis", "cashFlowBasis"],
+    ["capture_basis", "captureBasis"],
+    ["settlement_currency", "settlementCurrency"],
+    ["market_cap_currency", "marketCapCurrency"],
+    ["contract_address", "contractAddress"],
+    ["chain", "chain"],
+  ];
+  for (const [label, key] of fields) {
+    const value = observations[key];
+    if (typeof value === "string" && value.length > 0) lines.push(`${label}: ${value}`);
+  }
+  const amounts: [string, string][] = [
+    ["observed_entry_market_cap", "entryMarketCap"],
+    ["observed_exit_market_cap", "exitMarketCap"],
+    ["peak_observed_market_cap_retrospective_timing_unknown", "peakObservedMarketCap"],
+  ];
+  for (const [label, key] of amounts) {
+    const value = observations[key];
+    if (typeof value === "string" && value.length > 0) lines.push(`${label}: ${value}`);
+  }
+  const comments = observations.retrospectiveComments;
+  if (typeof comments === "string" && comments.trim().length > 0) {
+    lines.push(`retrospective_comments: ${comments}`);
   }
   return lines.join("\n");
 }
@@ -115,6 +158,10 @@ function snapshotText(snapshot: Row): string {
   for (const key of ["intendedEntry", "intendedRiskPct", "confidence"]) {
     const value = snapshot[key];
     if (typeof value === "number" && Number.isFinite(value)) lines.push(`${key}: ${value}`);
+  }
+  for (const key of ["intendedTakeProfitMarketCap", "marketCapCurrency", "knowledgeBasis"]) {
+    const value = snapshot[key];
+    if (typeof value === "string" && value.length > 0) lines.push(`${key}: ${value}`);
   }
   if (Array.isArray(snapshot.origins)) lines.push(`origins: ${snapshot.origins.join("|")}`);
   return lines.join("\n");
@@ -151,40 +198,66 @@ function assertCatalogSize(catalog: CatalogEntry[]): void {
   if (total > MAX_CATALOG_CHARS) throw new TradeError("UNSUPPORTED");
 }
 
-function provenanceOf(events: Row[]): {
+interface TradeProvenance {
   feesKnown: boolean;
-  calculationBasis: "linear_base_quantity" | "provider_net_only";
-  settlementCurrency: string;
+  calculationBasis: "linear_base_quantity" | "provider_net_only" | "manual_observations";
+  settlementCurrency: string | null;
   netPnlBasis: string | null;
   timestampBasis: string | null;
-} {
+  manualObservations: Row | null;
+  receivedAt: string | null;
+  eventTimeBasis: string | null;
+}
+
+function provenanceOf(events: Row[]): TradeProvenance {
   for (const event of events) {
     const facts = isRecord(event.facts) ? event.facts : null;
     if (facts && facts.kind === "trade_provenance") {
       const metadata = isRecord(facts.metadata) ? facts.metadata : null;
+      const basis =
+        facts.calculationBasis === "linear_base_quantity" ||
+        facts.calculationBasis === "manual_observations"
+          ? facts.calculationBasis
+          : "provider_net_only";
       return {
         feesKnown: facts.feesKnown === true,
-        calculationBasis:
-          facts.calculationBasis === "linear_base_quantity" ? "linear_base_quantity" : "provider_net_only",
+        calculationBasis: basis,
         settlementCurrency:
-          typeof facts.settlementCurrency === "string" ? facts.settlementCurrency : "unknown",
+          typeof facts.settlementCurrency === "string" ? facts.settlementCurrency : null,
         netPnlBasis:
           facts.netPnlBasis === "supplied_net" ||
           facts.netPnlBasis === "computed_linear_net" ||
+          facts.netPnlBasis === "actual_net_cashflows" ||
+          facts.netPnlBasis === "actual_gross_cashflows_less_fees" ||
           facts.netPnlBasis === "unavailable"
             ? facts.netPnlBasis
             : null,
-        timestampBasis: metadata && typeof metadata.timestampBasis === "string" ? metadata.timestampBasis : null,
+        timestampBasis:
+          metadata && typeof metadata.timestampBasis === "string"
+            ? metadata.timestampBasis
+            : typeof facts.eventTimeBasis === "string"
+              ? facts.eventTimeBasis
+              : null,
+        manualObservations: isRecord(facts.manualObservations) ? facts.manualObservations : null,
+        receivedAt: typeof facts.receivedAt === "string" ? facts.receivedAt : null,
+        eventTimeBasis: typeof facts.eventTimeBasis === "string" ? facts.eventTimeBasis : null,
       };
     }
   }
   return {
     feesKnown: false,
     calculationBasis: "provider_net_only",
-    settlementCurrency: "unknown",
+    settlementCurrency: null,
     netPnlBasis: null,
     timestampBasis: null,
+    manualObservations: null,
+    receivedAt: null,
+    eventTimeBasis: null,
   };
+}
+
+function strOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function validateAutopsy(value: AutopsyResult, catalogById: Map<string, CatalogEntry>): void {
@@ -255,28 +328,91 @@ export async function generateReview(
   if (!snapshot) throw new RepositoryError("decision snapshot missing", "CONFLICT");
 
   const provenance = provenanceOf(bundle.events);
-  const metrics = computeTradeMetrics(
-    {
-      quantity: String(trade.quantity),
-      entryPrice: String(trade.entry_price),
-      exitPrice: trade.exit_price === null ? null : String(trade.exit_price),
-      side: trade.side === "long" ? "long" : "short",
-      openedAt: trade.opened_at as Date | string,
-      closedAt: (trade.closed_at ?? null) as Date | string | null,
-      fees: provenance.feesKnown ? String(trade.fees) : null,
-      netRealizedPnl: trade.realized_pnl === null ? null : String(trade.realized_pnl),
-      calculationBasis: provenance.calculationBasis,
-    },
-    {
-      confirmedAt: decision.confirmed_at as Date | string,
-      intendedEntry: typeof snapshot.intendedEntry === "number" ? snapshot.intendedEntry : null,
-    },
-  );
+  const isSparse =
+    trade.provider === "manual" && provenance.calculationBasis === "manual_observations";
+  const observations = provenance.manualObservations ?? {};
+  const observedTimestamp = trade.closed_at ?? trade.opened_at ?? null;
+  let captureBasis: "contemporaneous" | "retrospective" | "unknown" = "unknown";
+
+  let metrics: Record<string, unknown> & { netPnlBasis: string };
+  if (isSparse) {
+    const executionState =
+      observations.executionState === "open" ||
+      observations.executionState === "closed" ||
+      observations.executionState === "unknown"
+        ? observations.executionState
+        : trade.closed_at === null
+          ? "unknown"
+          : "closed";
+    captureBasis =
+      snapshot.knowledgeBasis === "retrospective_recollection" ||
+      observations.captureBasis === "retrospective"
+        ? "retrospective"
+        : observations.captureBasis === "contemporaneous"
+          ? "contemporaneous"
+          : "unknown";
+    metrics = computeSparseManualMetrics(
+      {
+        quantity: strOrNull(trade.quantity),
+        entryPrice: strOrNull(trade.entry_price),
+        exitPrice: strOrNull(trade.exit_price),
+        side: trade.side === "long" ? "long" : "short",
+        openedAt: (trade.opened_at ?? null) as Date | string | null,
+        closedAt: (trade.closed_at ?? null) as Date | string | null,
+        executionState,
+        fees: provenance.feesKnown ? String(trade.fees) : null,
+        netRealizedPnl: trade.realized_pnl === null ? null : String(trade.realized_pnl),
+        amountInvested: strOrNull(observations.amountInvested),
+        proceedsReceived: strOrNull(observations.proceedsReceived),
+        cashFlowBasis:
+          observations.cashFlowBasis === "gross_excluding_fees" ||
+          observations.cashFlowBasis === "net_including_fees"
+            ? observations.cashFlowBasis
+            : "unknown",
+        settlementCurrency: provenance.settlementCurrency,
+        entryMarketCap: strOrNull(observations.entryMarketCap),
+        exitMarketCap: strOrNull(observations.exitMarketCap),
+        peakObservedMarketCap: strOrNull(observations.peakObservedMarketCap),
+        intendedTakeProfitMarketCap:
+          typeof snapshot.intendedTakeProfitMarketCap === "string" &&
+          typeof snapshot.marketCapCurrency === "string" &&
+          strOrNull(observations.marketCapCurrency) === snapshot.marketCapCurrency
+            ? snapshot.intendedTakeProfitMarketCap
+            : null,
+        marketCapCurrency: strOrNull(observations.marketCapCurrency),
+        captureBasis,
+      },
+      {
+        confirmedAt: decision.confirmed_at as Date | string,
+        intendedEntry: typeof snapshot.intendedEntry === "number" ? snapshot.intendedEntry : null,
+      },
+    );
+  } else {
+    metrics = computeTradeMetrics(
+      {
+        quantity: String(trade.quantity),
+        entryPrice: String(trade.entry_price),
+        exitPrice: trade.exit_price === null ? null : String(trade.exit_price),
+        side: trade.side === "long" ? "long" : "short",
+        openedAt: trade.opened_at as Date | string,
+        closedAt: (trade.closed_at ?? null) as Date | string | null,
+        fees: provenance.feesKnown ? String(trade.fees) : null,
+        netRealizedPnl: trade.realized_pnl === null ? null : String(trade.realized_pnl),
+        calculationBasis: provenance.calculationBasis === "linear_base_quantity"
+          ? "linear_base_quantity"
+          : "provider_net_only",
+      },
+      {
+        confirmedAt: decision.confirmed_at as Date | string,
+        intendedEntry: typeof snapshot.intendedEntry === "number" ? snapshot.intendedEntry : null,
+      },
+    );
+  }
   if (provenance.netPnlBasis !== null && metrics.netPnlBasis === "supplied_net") {
     metrics.netPnlBasis = provenance.netPnlBasis;
   }
 
-  const observedAt = isoOf(trade.closed_at === null ? trade.opened_at : trade.closed_at);
+  const observedAt = isoOf(observedTimestamp ?? provenance.receivedAt ?? trade.created_at);
   const decisionCreatedAt = isoOf(decision.created_at ?? decision.confirmed_at);
 
   const catalog: CatalogEntry[] = [];
@@ -340,19 +476,35 @@ export async function generateReview(
     kind: "trade_data",
     text: tradeProcessText(trade),
   });
+  if (isSparse) {
+    catalog.push({
+      id: String(
+        (
+          await repo.ensureEvidence({
+            kind: "trade_data",
+            tradeId: String(trade.id),
+            label: SPARSE_OBSERVATIONS_LABEL,
+            observedAt,
+          })
+        ).id,
+      ),
+      kind: "trade_data",
+      text: sparseObservationsText(observations),
+    });
+  }
   catalog.push({
     id: String(
       (
         await repo.ensureEvidence({
           kind: "trade_data",
           tradeId: String(trade.id),
-          label: METRIC_LABEL,
+          label: isSparse ? SPARSE_METRIC_LABEL : METRIC_LABEL,
           observedAt,
         })
       ).id,
     ),
     kind: "trade_data",
-    text: metricProcessText(metrics as Record<string, unknown>),
+    text: metricProcessText(metrics as Record<string, unknown>, isSparse),
   });
   for (const source of bundle.sources) {
     const existing = bundle.evidence.find(
@@ -387,14 +539,14 @@ export async function generateReview(
   const allowedEvidenceIds = catalog.map((entry) => entry.id);
 
   const result = await llm.generateStructured<AutopsyResult>({
-    system: AUTOPSY_SYSTEM_PROMPT,
+    system: isSparse ? SPARSE_AUTOPSY_SYSTEM_PROMPT : AUTOPSY_SYSTEM_PROMPT,
     input: JSON.stringify({
       decisionSnapshot: snapshot,
       captureTiming: metrics.captureTiming,
       evidenceCatalog: catalog,
     }),
     pipeline: "decision-autopsy",
-    promptVersion: REVIEW_PROMPT_VERSION,
+    promptVersion: isSparse ? SPARSE_AUTOPSY_PROMPT_VERSION : REVIEW_PROMPT_VERSION,
     inputEntityIds: [String(decision.id), String(trade.id)],
     schema: autopsySchema,
     schemaName: "decision_autopsy",
@@ -443,6 +595,14 @@ export async function generateReview(
         decisionQuality,
         settlementCurrency: provenance.settlementCurrency,
         timestampBasis: provenance.timestampBasis,
+        manualObservations: isSparse ? provenance.manualObservations : null,
+        evidenceQuality: isSparse
+          ? {
+              captureBasis,
+              eventTimeBasis: provenance.eventTimeBasis,
+              feesKnown: provenance.feesKnown,
+            }
+          : null,
       },
       aiInference,
       dimensions: result.value.dimensions.map((dimension) => ({
@@ -526,6 +686,8 @@ export async function getReview(
           exitPrice: view.trade.exit_price ?? null,
           openedAt: view.trade.opened_at,
           closedAt: view.trade.closed_at ?? null,
+          manualObservations: metrics.manualObservations ?? null,
+          evidenceQuality: metrics.evidenceQuality ?? null,
         }
       : null,
     decision: view.decision

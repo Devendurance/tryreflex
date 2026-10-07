@@ -11,13 +11,14 @@ export interface AttachTradeInput {
   externalId: string | null;
   symbol: string;
   side: "long" | "short";
-  quantity: string;
-  entryPrice: string;
+  quantity: string | null;
+  entryPrice: string | null;
   exitPrice: string | null;
   fees: string;
   realizedPnl: string | null;
-  openedAt: string;
+  openedAt: string | null;
   closedAt: string | null;
+  occurredAt: string;
   provenanceFacts: Record<string, unknown>;
 }
 
@@ -112,7 +113,7 @@ export function createTradeRepository(db: DbSession, authContext: AuthContext) {
     }
     const event = await q.query<Row>(
       `INSERT INTO public.trade_events (user_id,trade_id,event_type,occurred_at,facts) VALUES($1,$2,'other',$3,$4) RETURNING *`,
-      [userId, trade.id, input.openedAt, input.provenanceFacts],
+      [userId, trade.id, input.occurredAt, input.provenanceFacts],
     );
     const override = toRecord(input.provenanceFacts.symbolOverride);
     if (override) {
@@ -121,7 +122,7 @@ export function createTradeRepository(db: DbSession, authContext: AuthContext) {
         [
           userId,
           trade.id,
-          input.openedAt,
+          input.occurredAt,
           {
             kind: "symbol_override",
             decisionSymbol,
@@ -133,7 +134,7 @@ export function createTradeRepository(db: DbSession, authContext: AuthContext) {
     }
     const evidence = await q.query<Row>(
       `INSERT INTO public.evidence_records (user_id,kind,trade_id,label,observed_at) VALUES($1,'trade_data',$2,$3,$4) RETURNING *`,
-      [userId, trade.id, "Trade attachment and execution summary", input.closedAt ?? input.openedAt],
+      [userId, trade.id, "Trade attachment and execution summary", input.closedAt ?? input.occurredAt],
     );
     return { trade, created: true, event: event.rows[0] ?? null, evidence: evidence.rows[0] ?? null };
   }
@@ -160,11 +161,12 @@ export function createTradeRepository(db: DbSession, authContext: AuthContext) {
         })
         .catch(mapPersistenceError);
     },
-    assertDecisionLink(input: DecisionLinkCheck): Promise<void> {
+    assertDecisionLink(input: DecisionLinkCheck): Promise<Row> {
       return db
         .transaction(async (q) => {
           const decision = await lockDecision(q, input.decisionId);
           assertAttachable(decision, input);
+          return decision;
         })
         .catch(mapPersistenceError);
     },

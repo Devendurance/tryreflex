@@ -10,6 +10,11 @@ import {
   createGetHandler,
   createParseHandler,
 } from "../../src/server/decisions/http";
+import {
+  DECISION_PARSE_PROMPT_VERSION,
+  decisionInferenceSchema,
+  decisionParseSystemPrompt,
+} from "../../src/server/decisions/schemas";
 import type { MarketContextResult } from "../../src/server/market/service";
 
 const USER_ID = "123e4567-e89b-42d3-a456-426614174000";
@@ -226,4 +231,99 @@ test("failed real market context creates no snapshot", async () => {
   const response = await createContextHandler({ authProvider: authProvider(), db, market: async () => unavailable })(request({}), { id: DECISION_ID });
   assert.equal(response.status, 503);
   assert.equal(db.calls.filter((call) => call.text.startsWith("INSERT INTO public.market_context_snapshots")).length, 0);
+});
+
+test("secondary fallback persists partial status, agentkey provider, and owned evidence ids", async () => {
+  const db = fakeSession("confirmed");
+  const unavailable: MarketContextResult = {
+    assetClass: "stock",
+    symbol: "RNVDA",
+    capturedAt: "2026-10-07T00:00:00.000Z",
+    status: "unavailable",
+    components: {
+      quote: { status: "unavailable", code: "UPSTREAM_UNAVAILABLE", message: "market provider is unavailable" },
+      history: { status: "unavailable", code: "TIMEOUT", message: "provider timed out" },
+    },
+  };
+  const secondary = async (query: { assetSymbol: string }, role: string) => ({
+    provider: "agentkey" as const,
+    status: "available" as const,
+    items: [
+      {
+        kind: "external_context" as const,
+        text: "provider-reported context note",
+        underlyingSource: "x-search",
+        originalId: "post-1",
+        url: "https://example.com/post/1",
+        retrievedAt: "2026-10-07T00:00:00.000Z",
+        query,
+        provider: "agentkey" as const,
+        role: role as "fallback",
+      },
+    ],
+    error: null,
+  });
+  const response = await createContextHandler({
+    authProvider: authProvider(),
+    db,
+    market: async () => unavailable,
+    secondary,
+  })(request({}), { id: DECISION_ID });
+  assert.equal(response.status, 201);
+  const body = (await response.json()) as { status: string; evidence: { id: string }[] };
+  assert.equal(body.status, "partial");
+  const insert = db.calls.find((call) => call.text.startsWith("INSERT INTO public.market_context_snapshots"));
+  assert.equal(insert?.values?.[3], "agentkey");
+  const observedFacts = insert?.values?.[4] as Record<string, unknown>;
+  assert.equal(observedFacts.status, "partial");
+  assert.equal(observedFacts.primaryStatus, "unavailable");
+  const failures = observedFacts.primaryFailures as Record<string, { code: string }>;
+  assert.equal(failures.quote.code, "UPSTREAM_UNAVAILABLE");
+  assert.equal(failures.history.code, "TIMEOUT");
+  const provenance = insert?.values?.[6] as { secondary: { role: string; query: { assetSymbol: string } }[] };
+  assert.equal(provenance.secondary[0].role, "fallback");
+  assert.equal(provenance.secondary[0].query.assetSymbol, "RNVDA");
+  assert.ok(body.evidence.length >= 1);
+  for (const row of body.evidence) {
+    assert.equal(row.id, "evidence-1");
+    assert.notEqual(row.id, "post-1");
+  }
+});
+
+test("parse prompt v2 pins intendedEntry to token unit price and schema keeps null", () => {
+  assert.equal(DECISION_PARSE_PROMPT_VERSION, "decision-parse.v2");
+  assert.match(decisionParseSystemPrompt, /TOKEN UNIT PRICE/);
+  assert.match(decisionParseSystemPrompt, /valuation context, never unit prices/);
+  const parsed = decisionInferenceSchema.safeParse({
+    assetSymbol: "SOL",
+    assetClass: "crypto",
+    side: "long",
+    thesis: "Community rotation into SOL ecosystem.",
+    catalyst: null,
+    evidence: [
+      {
+        quote: "I got in around 800m market cap",
+        sourceType: "telegram",
+        label: "Telegram recap",
+        url: null,
+      },
+    ],
+    confidence: 0.8,
+    intendedEntry: null,
+    invalidation: null,
+    intendedRiskPct: null,
+    timeframe: null,
+    origins: [
+      {
+        label: "social_confirmation",
+        explanation: "Group recap influenced the buy.",
+        confidence: 0.7,
+        observedInputFacts: ["I got in around 800m market cap"],
+      },
+    ],
+  });
+  assert.equal(parsed.success, true);
+  if (parsed.success) {
+    assert.equal(parsed.data.intendedEntry, null);
+  }
 });

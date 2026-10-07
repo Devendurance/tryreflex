@@ -46,12 +46,12 @@ export const trades = pgTable(
     externalId: text("external_id"),
     symbol: text("symbol").notNull(),
     side: tradeSideEnum("side").notNull(),
-    quantity: numeric("quantity", { precision: 30, scale: 12 }).notNull(),
-    entryPrice: numeric("entry_price", { precision: 30, scale: 12 }).notNull(),
+    quantity: numeric("quantity", { precision: 30, scale: 12 }),
+    entryPrice: numeric("entry_price", { precision: 30, scale: 12 }),
     exitPrice: numeric("exit_price", { precision: 30, scale: 12 }),
     fees: numeric("fees", { precision: 30, scale: 12 }).notNull().default("0"),
     realizedPnl: numeric("realized_pnl", { precision: 30, scale: 12 }),
-    openedAt: timestamp("opened_at", { withTimezone: true }).notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
     closedAt: timestamp("closed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -71,6 +71,10 @@ export const trades = pgTable(
     check("trades_exit_price_positive", sql`exit_price IS NULL OR exit_price > 0`),
     check("trades_fees_nonnegative", sql`fees >= 0`),
     check("trades_closed_after_open", sql`closed_at IS NULL OR closed_at >= opened_at`),
+    check(
+      "trades_bitget_execution_required",
+      sql`provider <> 'bitget' OR (quantity IS NOT NULL AND entry_price IS NOT NULL AND opened_at IS NOT NULL)`,
+    ),
   ],
 );
 

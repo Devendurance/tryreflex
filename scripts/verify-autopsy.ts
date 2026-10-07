@@ -10,7 +10,7 @@ import { decisionSnapshotSchema } from "../src/server/db/validation";
 import { createConfirmHandler, createParseHandler } from "../src/server/decisions/http";
 import { createManualTradeHandler } from "../src/server/trades/http";
 import { createGenerateReviewHandler, createGetReviewHandler } from "../src/server/reviews/http";
-import { classifyProcessOutcome, computeDecisionQuality, computeTradeMetrics, REVIEW_DIMENSIONS, type ReviewDimension } from "../src/server/review-policy";
+import { classifyProcessOutcome, computeDecisionQuality, computeTradeMetrics, computeSparseManualMetrics, REVIEW_DIMENSIONS, type ReviewDimension } from "../src/server/review-policy";
 
 const BASE = "http://localhost:3002";
 const jarSchema = z.array(z.looseObject({ cookies: z.array(z.string()).min(1) })).min(2);
@@ -18,10 +18,17 @@ const genuineInputSchema = z.strictObject({
   decisionText: z.string().min(1),
   snapshot: decisionSnapshotSchema,
   trade: z.strictObject({
-    symbol: z.string().min(1), side: z.enum(["long", "short"]), quantity: z.string(), entryPrice: z.string(),
-    exitPrice: z.string().optional(), fees: z.string().optional(), realizedPnl: z.string().optional(),
-    openedAt: z.iso.datetime({ offset: true }), closedAt: z.iso.datetime({ offset: true }).optional(),
-    settlementCurrency: z.enum(["USD", "USDT", "USDC"]), symbolOverrideReason: z.string().optional(),
+    symbol: z.string().min(1), side: z.enum(["long", "short"]), quantity: z.string().nullish(), entryPrice: z.string().nullish(),
+    exitPrice: z.string().nullish(), fees: z.string().nullish(), realizedPnl: z.string().nullish(),
+    openedAt: z.iso.datetime({ offset: true }).nullish(), closedAt: z.iso.datetime({ offset: true }).nullish(),
+    settlementCurrency: z.string().nullish(), symbolOverrideReason: z.string().nullish(),
+    executionState: z.enum(["open", "closed", "unknown"]).nullish(),
+    amountInvested: z.string().nullish(), proceedsReceived: z.string().nullish(),
+    cashFlowBasis: z.enum(["gross_excluding_fees", "net_including_fees", "unknown"]).nullish(),
+    entryMarketCap: z.string().nullish(), exitMarketCap: z.string().nullish(), peakObservedMarketCap: z.string().nullish(),
+    marketCapCurrency: z.string().nullish(),
+    captureBasis: z.enum(["contemporaneous", "retrospective", "unknown"]).nullish(),
+    retrospectiveComments: z.string().nullish(), contractAddress: z.string().nullish(), chain: z.string().nullish(),
   }),
 });
 
@@ -106,9 +113,33 @@ async function main(): Promise<void> {
     const records = await client.query("SELECT t.*, d.confirmed_at, d.confirmed_snapshot FROM public.trades t JOIN public.decisions d ON d.user_id=t.user_id AND d.id=t.decision_id WHERE t.user_id=$1 AND t.id=$2", [owner.userId, tradeId]);
     assert.equal(records.rows.length, 1);
     const record = records.rows[0];
-    const expectedMetrics = computeTradeMetrics({ quantity: record.quantity, entryPrice: record.entry_price, exitPrice: record.exit_price, side: record.side, openedAt: record.opened_at, closedAt: record.closed_at, fees: genuine.trade.fees === undefined ? null : record.fees, netRealizedPnl: record.realized_pnl, calculationBasis: "linear_base_quantity" }, { confirmedAt: record.confirmed_at, intendedEntry: genuine.snapshot.intendedEntry ?? null });
+    const provenance = await client.query("SELECT facts FROM public.trade_events WHERE user_id=$1 AND trade_id=$2 AND facts->>'kind'='trade_provenance' ORDER BY created_at,id LIMIT 1", [owner.userId, tradeId]);
+    assert.equal(provenance.rows.length, 1);
+    const observations = provenance.rows[0].facts.manualObservations;
+    const nullableDecimal = (value: unknown): string | null => typeof value === "string" ? value : null;
+    const expectedMetrics = provenance.rows[0].facts.calculationBasis === "manual_observations"
+      ? computeSparseManualMetrics({
+          quantity: nullableDecimal(record.quantity), entryPrice: nullableDecimal(record.entry_price), exitPrice: nullableDecimal(record.exit_price),
+          side: record.side, openedAt: record.opened_at, closedAt: record.closed_at,
+          executionState: observations.executionState, fees: genuine.trade.fees == null ? null : record.fees,
+          netRealizedPnl: nullableDecimal(record.realized_pnl), amountInvested: nullableDecimal(observations.amountInvested),
+          proceedsReceived: nullableDecimal(observations.proceedsReceived), cashFlowBasis: observations.cashFlowBasis,
+          settlementCurrency: observations.settlementCurrency ?? null, entryMarketCap: nullableDecimal(observations.entryMarketCap),
+          exitMarketCap: nullableDecimal(observations.exitMarketCap), peakObservedMarketCap: nullableDecimal(observations.peakObservedMarketCap),
+          intendedTakeProfitMarketCap: observations.marketCapCurrency !== null && observations.marketCapCurrency !== undefined && observations.marketCapCurrency === record.confirmed_snapshot.marketCapCurrency ? nullableDecimal(record.confirmed_snapshot.intendedTakeProfitMarketCap) : null,
+          marketCapCurrency: observations.marketCapCurrency ?? null,
+          captureBasis: record.confirmed_snapshot.knowledgeBasis === "retrospective_recollection" ? "retrospective" : observations.captureBasis,
+        }, { confirmedAt: record.confirmed_at, intendedEntry: genuine.snapshot.intendedEntry ?? null })
+      : computeTradeMetrics({ quantity: record.quantity, entryPrice: record.entry_price, exitPrice: record.exit_price, side: record.side, openedAt: record.opened_at, closedAt: record.closed_at, fees: genuine.trade.fees == null ? null : record.fees, netRealizedPnl: record.realized_pnl, calculationBasis: "linear_base_quantity" }, { confirmedAt: record.confirmed_at, intendedEntry: genuine.snapshot.intendedEntry ?? null });
     assert.equal(read.review.metrics.tradeMetrics.netRealizedPnl, expectedMetrics.netRealizedPnl);
     assert.equal(read.review.metrics.tradeMetrics.outcome, expectedMetrics.outcome);
+    assert.equal(read.review.metrics.tradeMetrics.holdingDurationMs, expectedMetrics.holdingDurationMs);
+    if ("marketCapMovementMultiple" in expectedMetrics) {
+      assert.equal(read.review.metrics.tradeMetrics.marketCapMovementMultiple, expectedMetrics.marketCapMovementMultiple);
+      assert.equal(read.review.metrics.tradeMetrics.exitVsTargetMarketCapMultiple, expectedMetrics.exitVsTargetMarketCapMultiple);
+      assert.equal(read.review.metrics.tradeMetrics.quantity, record.quantity);
+      assert.equal(read.review.metrics.tradeMetrics.entryPrice, record.entry_price);
+    }
     assert.equal(generated.classification, classifyProcessOutcome(quality.overallScore, expectedMetrics.outcome as Parameters<typeof classifyProcessOutcome>[1]));
     assert.deepEqual(record.confirmed_snapshot, genuine.snapshot);
     const links = await client.query<{ owner_valid: boolean; count: number }>(
@@ -118,7 +149,16 @@ async function main(): Promise<void> {
     const run = await client.query("SELECT model,pipeline,prompt_version,status FROM public.ai_runs WHERE user_id=$1 AND id=$2", [owner.userId, runId]);
     assert.equal(run.rows[0]?.pipeline, "decision-autopsy");
     assert.equal(run.rows[0]?.status, "success");
-    const report = { status: "verified", verificationSurface: "actual route handlers + real managed sessions + genuine user input + Neon rollback", model: run.rows[0].model, promptVersion: run.rows[0].prompt_version, decisionQuality: quality, outcome: expectedMetrics.outcome, classification: generated.classification, dimensions: 5, evidenceLinks: links.rows[0].count, foreignRead: 404, originalSnapshotPreserved: true };
+    const report = {
+      status: "verified", verificationSurface: "actual route handlers + real managed sessions + genuine user input + Neon rollback",
+      model: run.rows[0].model, promptVersion: run.rows[0].prompt_version,
+      decisionOriginLabels: draft.inference.origins.map((origin: { label: string }) => origin.label),
+      deterministicMetrics: read.review.metrics.tradeMetrics, decisionQuality: quality, outcome: expectedMetrics.outcome,
+      classification: generated.classification, dimensionResults: read.review.dimensions,
+      summary: read.review.summary, lessons: read.review.lessons, evidence: read.review.evidence,
+      evidenceLinks: links.rows[0].count, foreignRead: 404, originalSnapshotPreserved: true,
+      unavailableDimensions: read.review.dimensions.filter((dimension: { score: unknown }) => dimension.score === null).map((dimension: { dimension: string; explanation: string }) => ({ dimension: dimension.dimension, explanation: dimension.explanation })),
+    };
     await client.query("ROLLBACK");
     inTransaction = false;
     const remaining = await client.query<{ decisions: number; trades: number; reviews: number; dimensions: number }>(
