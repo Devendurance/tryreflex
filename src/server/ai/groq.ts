@@ -51,6 +51,7 @@ export interface GroqLLMProviderOptions {
   recorder: AiRunRecorder;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  maxCompletionTokens?: number;
 }
 
 function assertStrictJsonSchema(node: unknown): void {
@@ -104,12 +105,17 @@ export class GroqLLMProvider implements LLMProvider {
   private readonly timeoutMs: number;
   private readonly apiKey: string;
   private readonly model: string;
+  private readonly maxCompletionTokens: number;
 
   constructor(options: GroqLLMProviderOptions) {
     this.recorder = options.recorder;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > MAX_TIMEOUT_MS) {
+      throw new AIError("CONFIGURATION");
+    }
+    this.maxCompletionTokens = options.maxCompletionTokens ?? MAX_COMPLETION_TOKENS;
+    if (!Number.isInteger(this.maxCompletionTokens) || this.maxCompletionTokens < 1 || this.maxCompletionTokens > 16384) {
       throw new AIError("CONFIGURATION");
     }
     const apiKey = process.env.GROQ_API_KEY;
@@ -127,7 +133,7 @@ export class GroqLLMProvider implements LLMProvider {
         { role: "system", content: request.system },
         { role: "user", content: request.input },
       ],
-      max_completion_tokens: MAX_COMPLETION_TOKENS,
+      max_completion_tokens: this.maxCompletionTokens,
       stream: false,
     };
     return this.execute(request, payload, async (content) => content);
@@ -155,7 +161,7 @@ export class GroqLLMProvider implements LLMProvider {
         type: "json_schema",
         json_schema: { name: request.schemaName, strict: true, schema: jsonSchema },
       },
-      max_completion_tokens: MAX_COMPLETION_TOKENS,
+      max_completion_tokens: this.maxCompletionTokens,
       stream: false,
     };
     return this.execute(request, payload, async (content) => {

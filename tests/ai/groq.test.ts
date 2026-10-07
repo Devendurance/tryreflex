@@ -504,3 +504,38 @@ test.after(() => {
   if (savedEnv.model === undefined) delete process.env.GROQ_MODEL;
   else process.env.GROQ_MODEL = savedEnv.model;
 });
+
+test("maxCompletionTokens defaults to 2048 in both payloads and accepts bounded overrides", async () => {
+  let captured: unknown;
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    captured = JSON.parse(String(init?.body));
+    return jsonResponse(groqBody('{"answer":"ok"}'));
+  };
+  const def = new GroqLLMProvider({ recorder: fakeRecorder(), fetch: fetchImpl });
+  await def.generateStructured({ ...REQ, schema: objectSchema, schemaName: "a" });
+  assert.equal((captured as Record<string, unknown>).max_completion_tokens, 2048);
+  await def.generateText(REQ);
+  assert.equal((captured as Record<string, unknown>).max_completion_tokens, 2048);
+
+  const override = new GroqLLMProvider({ recorder: fakeRecorder(), fetch: fetchImpl, maxCompletionTokens: 8192 });
+  const result = await override.generateStructured({ ...REQ, schema: objectSchema, schemaName: "a" });
+  assert.equal((captured as Record<string, unknown>).max_completion_tokens, 8192);
+  assert.equal(result.value.answer, "ok");
+
+  const maxBoundary = new GroqLLMProvider({ recorder: fakeRecorder(), fetch: fetchImpl, maxCompletionTokens: 16384 });
+  await maxBoundary.generateText(REQ);
+  assert.equal((captured as Record<string, unknown>).max_completion_tokens, 16384);
+});
+
+test("invalid maxCompletionTokens fails CONFIGURATION before any fetch", () => {
+  const fetchImpl: typeof fetch = async () => {
+    throw new Error("should not fetch");
+  };
+  for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 16385]) {
+    assert.throws(
+      () => new GroqLLMProvider({ recorder: fakeRecorder(), fetch: fetchImpl, maxCompletionTokens: value }),
+      (e) => e instanceof AIError && e.code === "CONFIGURATION",
+      `value ${value} must be rejected`,
+    );
+  }
+});

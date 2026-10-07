@@ -12,7 +12,7 @@
     "test:persistence": "node --import tsx --test tests/db/auth.test.ts tests/db/config.test.ts tests/db/validation.test.ts tests/db/repositories.test.ts tests/db/embeddings.test.ts tests/db/migration.test.ts",
     "test:ai": "node --import tsx --test tests/ai/groq.test.ts tests/ai/jina.test.ts tests/ai/memory.test.ts tests/ai/verify-ai.test.ts tests/ai/origin.test.ts",
     "test:decisions": "node --import tsx --test tests/decisions/auth.test.ts tests/decisions/routes.test.ts",
-    "test:autopsy": "node --import tsx --test tests/autopsy/policy.test.ts tests/autopsy/provider.test.ts tests/autopsy/trades.test.ts tests/autopsy/reviews.test.ts tests/autopsy/http.test.ts tests/autopsy/sparse.test.ts",
+    "test:autopsy": "node --import tsx --test tests/autopsy/policy.test.ts tests/autopsy/provider.test.ts tests/autopsy/trades.test.ts tests/autopsy/reviews.test.ts tests/autopsy/http.test.ts tests/autopsy/sparse.test.ts tests/autopsy/verification.test.ts",
     "test:all": "npm test && npm run test:persistence && npm run test:ai && npm run test:decisions && npm run test:autopsy",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

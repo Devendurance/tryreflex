@@ -25,7 +25,7 @@ export function createGenerateReviewHandler(deps: ReviewRouteDeps = {}) {
       const { auth, db } = await requireAuthenticated(deps);
       const body = await requireJsonBody(request);
       const repo = createReviewRepository(db, auth);
-      const llm = deps.llm ?? new GroqLLMProvider({ recorder: createRepositories(db, auth).aiRuns });
+      const llm = deps.llm ?? new GroqLLMProvider({ recorder: createRepositories(db, auth).aiRuns, maxCompletionTokens: 8192 });
       const result = await providerCallLimiter(() => generateReview(repo, llm, body));
       return jsonResponse(201, {
         review: result.review,
