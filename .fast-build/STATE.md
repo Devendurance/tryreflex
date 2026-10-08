@@ -15,27 +15,28 @@
 
 ## Frontend MVP slices
 - [x] 3A Real Neon Auth UI (sign in/up, reset, sign out) + protected /app workspace shell + overview. (d101b38)
-- [x] 3B Decision Desk: parse -> inspect -> correct -> confirm -> view saved decision.
-- [ ] 3C Trade Activity + Classic CSV import UI (preview, purpose, commit, history, reclassify).
+- [x] 3B Decision Desk: parse -> inspect -> correct -> confirm -> view saved decision. (623e6c7)
+- [x] 3C Trade Activity + Classic CSV import UI (preview, purpose, commit, history, reclassify).
 - [ ] 3D Autopsy + DNA screens (dimensions, evidence, coverage, drift, honest sparse states).
 - [ ] 3E Playbook + Pre-Trade Recall screens.
 - [ ] 3F Persistent end-to-end QA, cross-user isolation, deploy prep.
 
 ## Current slice
-- 3B DONE. Routes /app/decisions (composer + Recent decisions) and /app/decisions/[id] (draft review/confirm editor, or read-only saved view with raw text, Reflex inference, history). New GET /api/decisions?limit=1..50: owner-scoped summaries via existing decisions.list, hasMore, strict query keys; test in tests/decisions/routes.test.ts.
-- UI files: src/components/decisions/{decision-api,decision-desk,decision-parts,decision-editor,decision-detail}.tsx; Decision Desk added to workspace-shell NAV and Overview step 1.
-- Semantics: raw text verbatim; inferred origins tagged Inference with exact quotes and never pre-ticked; snapshot confidence is the user's own conviction, never prefilled from extraction confidence; intendedEntry = unit price only; market-cap targets use intendedTakeProfitMarketCap + required currency; empty optionals omitted; explicit attestation before confirm; a failed parse leaves a draft (error responses carry no id) that surfaces in Recent decisions and can be completed by hand.
-- Not built: correcting a confirmed decision (backend appends a revision on a changed re-confirm; UI shows history only).
+- 3C DONE, frontend only (no backend change). Routes /app/activity (ImportFlow + Imported activity list + Import history, cursor "Show more"), /app/activity/[id] (order facts, fills, reported totals, purpose + reclassify + audit, provenance), /app/activity/imports/[id] (receipt + its orders). Sidebar NAV + Overview step 2 link to it.
+- Files: src/components/activity/{activity-api.ts,activity-parts,activity-import,activity-desk,activity-detail}.tsx. upload() posts FormData without setting Content-Type; reuses ApiError/api from decision-api.
+- Semantics: preview writes nothing; changing file or account label clears the preview; purposes default unknown, changing one unticks the attestation; commit sends the original File + same scope + previewHash + confirmed=true + purposes for every orderId; commit blocked when !importEligible or any duplicate conflict; already-imported orders keep their saved purpose; fills come from the canonical snapshot so order price and fill price stay distinct; net-of-fees labeled "Not profit"; cost basis/P&L always Unknown; reclassify posts the current version, 409 reloads the activity.
 
 ## Completed
 - 3A: Neon Auth pages, src/proxy.ts protecting /app (fails closed), workspace shell, Overview. SDK throws AuthApiError {status, code}; authErrorMessage maps thrown and returned errors.
+- 3B: Decision Desk /app/decisions + /app/decisions/[id], GET /api/decisions owner-scoped list. Inferred origins never pre-ticked, explicit attestation, failed parse leaves a draft in Recent decisions. Correcting a confirmed decision not in UI yet.
 
 ## Blockers
 - Fresh autopsy grounding reliability (affects 3D/3F).
 - Agent browser has no Neon session: signed-in screens need the user to check or share captures. Never create Neon Auth accounts without approval.
 
 ## Verification
-- 3B: test:decisions 14/14; type-check/lint/build pass; anonymous /app/decisions* 307 -> /sign-in, /api/decisions list/get/parse 401. User approved one permanent genuine decision: parse, correct, confirm, refresh, Recent list reopen, logout/login all worked; user checked 1440/820/390/320. Cross-owner covered by route tests (owner-filtered list, foreign GET 404); no second live account used.
+- 3C: type-check, lint (0 errors), production build pass. Anonymous /app/activity, /app/activity/[id], /app/activity/imports/[id] 307 -> /sign-in; GET activities/imports list+[id] and POST preview/commit/purpose all 401. User approved and ran the genuine INJ CSV live: 2 new orders/2 fills, same-file reimport 0 new with "already imported", 7.404 order vs 7.407 fill separate, both payment_conversion, reclassify v1->v2->v3 audit, layouts OK. Server log clean (only pg sslmode warning). Cross-owner relies on existing classic-csv tests (51/51 historically); no second live account.
+- 3B: test:decisions 14/14; user ran a genuine permanent decision end to end.
 
 ## Next action
-- 3C Trade Activity + Classic CSV import UI at /app/activity. Read src/server/imports/bitget-classic/http.ts and repository read shapes first (listActivities -> {activities,nextCursor}, listImports -> {imports,nextCursor}). Flow: multipart preview -> per-order purpose (default unknown) -> commit with previewHash + confirmed:true -> import history -> purpose reclassify with version check. Manual trade entry via POST /api/trades/manual only if it fits the slice. No PnL or cost basis.
+- 3D Autopsy + DNA screens. Read src/server/reviews http (POST /api/reviews/generate, GET /api/reviews/[id]) and GET /api/dna + POST /api/patterns/recompute shapes first. Needs a confirmed decision with an attached trade: check whether trade attachment (POST /api/trades/manual) must be wired as part of 3D. Show dimensions, quotes, coverage, provisional/unassessed states, drift; surface UNSUPPORTED_MOTIVE_CLAIM grounding failures honestly.
