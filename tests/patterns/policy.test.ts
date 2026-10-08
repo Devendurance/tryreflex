@@ -184,6 +184,35 @@ test("inferred origins alone cannot establish; user-confirmed origins can", () =
   assert.equal(confirmedInfluence?.status, "established");
 });
 
+test("confirmed origins replace unselected model inferences in DNA while legacy inference-only events keep inference basis", () => {
+  const events = Array.from({ length: 4 }, (_, i) =>
+    makeEvent({
+      decisionId: `d${i}`,
+      reviewedAt: `2026-10-0${i + 1}T00:00:00.000Z`,
+      origins: [
+        { label: "pure_impulse", basis: "inference", confidence: 0.9 },
+        { label: "social_confirmation", basis: "user_confirmed", confidence: null },
+      ],
+    }),
+  );
+  const result = computeDecisionDNA(USER_ID, events);
+  const influence = result.candidates.filter((candidate) => candidate.category === "influence");
+  assert.deepEqual(influence.map((candidate) => candidate.observedStatistics.feature), ["social_confirmation"]);
+  assert.equal(influence[0].status, "established");
+  assert.equal(result.candidates.some((candidate) => candidate.observedStatistics.feature === "pure_impulse"), false);
+  for (const candidate of result.candidates) {
+    assert.ok(!JSON.stringify(candidate.observedStatistics).includes("pure_impulse:inference"), "unselected inference must not shape cohorts");
+  }
+
+  const single = computeDecisionDNA(USER_ID, [events[0]]);
+  assert.ok(single.candidates.every((candidate) => candidate.status === "observation"), "one review is never a recurring habit");
+
+  const legacy = computeDecisionDNA(USER_ID, [makeEvent({ origins: [{ label: "pure_impulse", basis: "inference", confidence: 0.9 }] })]);
+  const legacyInfluence = legacy.candidates.find((candidate) => candidate.category === "influence");
+  assert.equal(legacyInfluence?.observedStatistics.feature, "pure_impulse");
+  assert.equal(legacyInfluence?.status, "observation");
+});
+
 test("multiple reviews of one decision keep only the latest review as support", () => {
   const result = computeDecisionDNA(USER_ID, [
     makeEvent({ reviewId: "old-review", reviewedAt: "2026-10-01T00:00:00.000Z" }),

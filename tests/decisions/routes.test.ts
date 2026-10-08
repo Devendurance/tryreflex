@@ -67,8 +67,9 @@ const snapshot = {
   sources: [{ sourceType: "telegram" as const, label: "Telegram group", note: "someone in my Telegram group called it" }],
 };
 
-function fakeSession(initialStatus: "draft" | "confirmed" = "draft") {
+function fakeSession(initialStatus: "draft" | "confirmed" = "draft", seededOrigins: Record<string, unknown>[] = []) {
   const calls: { text: string; values?: readonly unknown[] }[] = [];
+  const origins = [...seededOrigins];
   let status = initialStatus;
   let rawInput = "I bought rNVDA because someone in my Telegram group called it and everyone looked bullish.";
   let confirmedSnapshot: unknown = initialStatus === "confirmed" ? snapshot : null;
@@ -96,6 +97,7 @@ function fakeSession(initialStatus: "draft" | "confirmed" = "draft") {
       if (text.startsWith("SELECT * FROM public.decisions")) {
         return values?.[1] === OTHER_ID ? { rows: [] as T[] } : { rows: [decision()] as T[] };
       }
+      if (text.startsWith("UPDATE public.decisions") && !text.includes("status='confirmed'")) return { rows: [decision()] as T[] };
       if (text.startsWith("UPDATE public.decisions")) {
         status = "confirmed";
         confirmedSnapshot = values?.[2];
@@ -106,7 +108,13 @@ function fakeSession(initialStatus: "draft" | "confirmed" = "draft") {
         return { rows: [decision()] as T[] };
       }
       if (text.startsWith("INSERT INTO public.decision_revisions")) return { rows: [{ id: "revision-1", version: 1, snapshot }] as T[] };
-      if (text.startsWith("INSERT INTO public.decision_origins")) return { rows: [{ id: "origin-1" }] as T[] };
+      if (text.startsWith("INSERT INTO public.decision_origins")) {
+        const basis = text.includes("'user_confirmed'") ? "user_confirmed" : "inference";
+        const row = { id: `origin-${origins.length + 1}`, user_id: values?.[0], decision_id: values?.[1], label: values?.[2], explanation: values?.[3], confidence: basis === "inference" ? values?.[4] : null, basis };
+        origins.push(row);
+        return { rows: [row] as T[] };
+      }
+      if (text.includes("decision_origins WHERE")) return { rows: origins as T[] };
       if (text.startsWith("INSERT INTO public.evidence_records")) return { rows: [{ id: "evidence-1" }] as T[] };
       if (text.startsWith("INSERT INTO public.decision_sources")) return { rows: [{ id: "source-1" }] as T[] };
       if (text.includes("decision_revisions WHERE")) return { rows: [] as T[] };
@@ -125,13 +133,13 @@ function authProvider(context: AuthContext | null = auth) {
   return { getContext: async () => context };
 }
 
-function llm(): LLMProvider {
+function llm(value: unknown = inference): LLMProvider {
   return {
     async generateText() {
       throw new Error("unused");
     },
     async generateStructured<T>(request: StructuredGenerationRequest<T>): Promise<GenerationResult<T>> {
-      const result = request.schema.safeParse(inference);
+      const result = request.schema.safeParse(value);
       if (!result.success) throw new AIError("SCHEMA");
       request.validate?.(result.data);
       return {
@@ -183,6 +191,50 @@ test("repeated confirmation is idempotent and does not duplicate revision histor
   assert.equal(second.status, 200);
   assert.equal((await second.json()).decision.idempotent, true);
   assert.equal(db.calls.filter((call) => call.text.startsWith("INSERT INTO public.decision_revisions")).length, 1);
+});
+
+test("user-confirmed origin is recorded separately from an unselected model inference", async () => {
+  const db = fakeSession();
+  const rawInput = "I got a founder's sale WL. It was just hype on Injective. I thought either I win or I lose.";
+  const impulse = {
+    ...inference,
+    assetSymbol: "RUNNER",
+    assetClass: "crypto" as const,
+    evidence: [],
+    origins: [{ label: "pure_impulse" as const, explanation: "The input describes a win-or-lose gamble.", confidence: 0.9, observedInputFacts: ["I thought either I win or I lose"] }],
+  };
+  const parsed = await createParseHandler({ authProvider: authProvider(), db, llm: llm(impulse) })(request({ text: rawInput }));
+  assert.equal(parsed.status, 201);
+  const confirmedSnapshot = { assetSymbol: "RUNNER", assetClass: "crypto" as const, side: "long" as const, origins: ["social_confirmation" as const], sources: [] };
+  const confirmed = await createConfirmHandler({ authProvider: authProvider(), db })(request(confirmedSnapshot), { id: DECISION_ID });
+  assert.equal(confirmed.status, 200);
+  assert.deepEqual((await confirmed.json()).decision.confirmedSnapshot.origins, ["social_confirmation"]);
+
+  const view = await createGetHandler({ authProvider: authProvider(), db })(new Request("http://localhost"), { id: DECISION_ID });
+  const body = (await view.json()) as { origins: { label: string; basis: string; confidence: unknown; explanation: string }[] };
+  assert.deepEqual(body.origins.map((o) => [o.label, o.basis]), [["pure_impulse", "inference"], ["social_confirmation", "user_confirmed"]]);
+  const userConfirmed = body.origins.find((o) => o.basis === "user_confirmed")!;
+  assert.equal(userConfirmed.confidence, null);
+  assert.equal(userConfirmed.explanation, "Explicitly selected by the user during confirmation.");
+  assert.equal(body.origins.find((o) => o.label === "pure_impulse")?.confidence, 0.9);
+  assert.ok(!body.origins.some((o) => o.label === "pure_impulse" && o.basis === "user_confirmed"));
+});
+
+test("foreign-user confirmation is denied and records no origins", async () => {
+  const db = fakeSession();
+  const response = await createConfirmHandler({ authProvider: authProvider(), db })(request(snapshot), { id: OTHER_ID });
+  assert.equal(response.status, 404);
+  assert.ok(!db.calls.some((call) => call.text.startsWith("INSERT INTO public.decision_origins")));
+  assert.ok(!db.calls.some((call) => call.text.startsWith("UPDATE public.decisions")));
+});
+
+test("legacy confirmed decision without confirmed-origin rows stays readable with inference labels", async () => {
+  const db = fakeSession("confirmed", [{ id: "o-legacy", user_id: USER_ID, decision_id: DECISION_ID, label: "borrowed_conviction", explanation: "model", confidence: 0.95, basis: "inference" }]);
+  const response = await createGetHandler({ authProvider: authProvider(), db })(new Request("http://localhost"), { id: DECISION_ID });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.decision.confirmedSnapshot.origins, ["borrowed_conviction", "social_confirmation"]);
+  assert.deepEqual(body.origins.map((o: { basis: string }) => o.basis), ["inference"]);
 });
 
 test("cross-owner read returns 404 without exposing another decision", async () => {

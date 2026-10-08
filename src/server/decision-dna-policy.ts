@@ -120,9 +120,14 @@ function statistics(events: readonly DNAEvent[]) {
     decimalRounding: "12 decimal places, half away from zero",
   };
 }
+function effectiveOrigins(event: DNAEvent): DNAEvent["origins"] {
+  const confirmed = event.origins.filter((origin) => origin.basis === "user_confirmed");
+  return confirmed.length > 0 ? confirmed : event.origins;
+}
 function originCohort(event: DNAEvent): Record<string, unknown> | null {
-  if (!event.assetClass || !event.origins.length) return null;
-  return { assetClass: event.assetClass, origins: unique(event.origins.map((origin) => `${origin.label}:${origin.basis}`)) };
+  const origins = effectiveOrigins(event);
+  if (!event.assetClass || !origins.length) return null;
+  return { assetClass: event.assetClass, origins: unique(origins.map((origin) => `${origin.label}:${origin.basis}`)) };
 }
 function validEvidence(event: DNAEvent, id: string): DNAEvidence {
   const evidence = event.evidence.find((entry) => entry.id === id);
@@ -151,8 +156,8 @@ function features(event: DNAEvent): Feature[] {
   const coverageQualified = assessed.evidenceCoveragePct >= DNA_MIN_COVERAGE;
   const cohort = originCohort(event);
   const add = (feature: Feature) => result.push({ ...feature, evidenceRefs: unique([event.reviewEvidenceId, ...feature.evidenceRefs]) });
-  for (const origin of event.origins) {
-    if (!LABELS.has(origin.label)) return invalid();
+  if (event.origins.some((origin) => !LABELS.has(origin.label))) return invalid();
+  for (const origin of effectiveOrigins(event)) {
     if (!event.assetClass) continue;
     add({ category: "influence", feature: origin.label, basis: origin.basis, cohort: { assetClass: event.assetClass }, evidenceRefs: [], facts: [], highQuality: coverageQualified && origin.basis === "user_confirmed" });
   }

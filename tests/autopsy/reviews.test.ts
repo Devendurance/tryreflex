@@ -284,6 +284,41 @@ test("LLM input excludes outcome facts and inference-basis origins", async () =>
   assert.ok(catalog.some((e) => e.text.includes("holdingDurationMs: 86400333")));
 });
 
+test("autopsy catalog carries the confirmation-time origin and leaves the unselected inference out", async () => {
+  const capture: { requests: StructuredGenerationRequest<unknown>[] } = { requests: [] };
+  const repo = fakeRepo({
+    async loadBundle() {
+      return {
+        trade: tradeRow,
+        decision: decisionRow,
+        origins: [
+          { id: "o1", label: "pure_impulse", basis: "inference", explanation: "The input describes a win-or-lose gamble.", confidence: 0.9 },
+          { id: "o2", label: "social_confirmation", basis: "user_confirmed", explanation: "Explicitly selected by the user during confirmation.", confidence: null },
+        ],
+        sources: [],
+        contexts: [],
+        events: [{ facts: { kind: "trade_provenance", feesKnown: true, calculationBasis: "provider_net_only", metadata: { timestampBasis: "position_created_updated" } } }],
+        evidence: [],
+      };
+    },
+    async ensureEvidence(input: { label: string }) {
+      const ids: Record<string, string> = {
+        "Decision raw input": EV_INPUT,
+        "Confirmed decision snapshot": EV_SNAPSHOT,
+        "Deterministic process metrics trade-metrics.v1": EV_METRIC,
+        "Trade attachment and execution summary": EV_TRADE,
+        "Origin (user-confirmed): social_confirmation": "623e4567-e89b-42d3-a456-426614174006",
+      };
+      return { id: ids[input.label] ?? EV_INPUT };
+    },
+  });
+  await generateReview(repo, fakeLlm(autopsy(), capture), { tradeId: TRADE_ID });
+  const catalog = JSON.parse(capture.requests[0].input).evidenceCatalog as { text: string }[];
+  assert.ok(catalog.some((e) => e.text === "origin (user-confirmed): social_confirmation\nexplanation: Explicitly selected by the user during confirmation."));
+  assert.ok(!catalog.some((e) => e.text.includes("pure_impulse")));
+  assert.ok(!capture.requests[0].input.includes("win-or-lose gamble"));
+});
+
 test("review save failure maps to PERSISTENCE", async () => {
   const repo = fakeRepo({
     async persistReview() {

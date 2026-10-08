@@ -31,6 +31,8 @@ import {
   validateEmbedding,
 } from "./validation";
 
+export const USER_CONFIRMED_ORIGIN_EXPLANATION = "Explicitly selected by the user during confirmation.";
+
 export class RepositoryError extends Error {
   constructor(
     message: string,
@@ -274,6 +276,12 @@ export function createRepositories(db: DbSession, auth: AuthContext) {
           `INSERT INTO public.decision_revisions (user_id,decision_id,version,snapshot,reason) VALUES($1,$2,1,$3,$4) RETURNING *`,
           [userId, id, snapshot, "confirmed"],
         );
+        for (const label of new Set(snapshot.origins)) {
+          await tx.query(
+            `INSERT INTO public.decision_origins (user_id,decision_id,label,explanation,confidence,basis) VALUES($1,$2,$3,$4,NULL,'user_confirmed')`,
+            [userId, id, label, USER_CONFIRMED_ORIGIN_EXPLANATION],
+          );
+        }
         return { ...updated.rows[0], revision: revision.rows[0], idempotent: false };
       });
     },

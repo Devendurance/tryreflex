@@ -107,9 +107,44 @@ async function main() {
     const rawInput = "  TEST ONLY, isolated decision input\n";
     const draft = await reposA.decisions.createDraft({ rawInput, structuredInference: { testOnly: true } });
     const decisionId = draft.id as string;
-    const snapshot = { assetSymbol: "TEST", assetClass: "other", side: "watch", origins: ["original_research"], sources: [] };
+    await reposA.decisions.applyInference(decisionId, {
+      structuredInference: { testOnly: true },
+      assetSymbol: "TEST",
+      assetClass: "other",
+      side: "watch",
+      origins: [{ label: "pure_impulse", explanation: "test-only model suggestion", confidence: 0.9, observedInputFacts: ["TEST ONLY"] }],
+      evidenceQuotes: [],
+      sources: [],
+    });
+    const snapshot = { assetSymbol: "TEST", assetClass: "other", side: "watch", origins: ["social_confirmation"], sources: [] };
     await reposA.decisions.confirm(decisionId, snapshot);
-    await reposA.decisions.appendRevision(decisionId, { snapshot: { ...snapshot, thesis: "test revision" }, reason: "isolated rollback verification" });
+    const originRows = async () =>
+      (await client.query<{ label: string; basis: string; confidence: string | null; explanation: string }>(
+        "SELECT label,basis,confidence,explanation FROM public.decision_origins WHERE user_id=$1 AND decision_id=$2 ORDER BY basis,label",
+        [userA, decisionId],
+      )).rows;
+    const afterConfirm = await originRows();
+    assert.deepEqual(afterConfirm.map((r) => [r.label, r.basis]), [["pure_impulse", "inference"], ["social_confirmation", "user_confirmed"]]);
+    assert.equal(afterConfirm[1].confidence, null);
+    assert.equal(afterConfirm[1].explanation, "Explicitly selected by the user during confirmation.");
+    assert.equal(Number(afterConfirm[0].confidence), 0.9);
+    const repeat = await reposA.decisions.confirm(decisionId, snapshot);
+    assert.equal(repeat.idempotent, true);
+    verified.push("confirm records user_confirmed origins beside untouched inference; repeat is idempotent");
+    await reposA.decisions.appendRevision(decisionId, { snapshot: { ...snapshot, origins: ["pure_impulse"], thesis: "test revision" }, reason: "isolated rollback verification" });
+    assert.deepEqual(await originRows(), afterConfirm);
+    verified.push("later revision leaves original origin provenance unchanged");
+    const atomicDraft = await reposA.decisions.createDraft({ rawInput: "atomic origin rollback test" });
+    const atomicId = atomicDraft.id as string;
+    await client.query("INSERT INTO public.decision_origins (user_id,decision_id,label,explanation,confidence,basis) VALUES($1,$2,'original_research','pre-existing conflict',NULL,'user_confirmed')", [userA, atomicId]);
+    await assert.rejects(() => reposA.decisions.confirm(atomicId, { ...snapshot, origins: ["original_research"] }));
+    const atomic = await reposA.decisions.get(atomicId);
+    assert.equal(atomic?.status, "draft");
+    assert.equal(atomic?.confirmed_snapshot, null);
+    assert.equal((await client.query("SELECT 1 FROM public.decision_revisions WHERE user_id=$1 AND decision_id=$2", [userA, atomicId])).rows.length, 0);
+    verified.push("origin insert failure rolls back confirmation and revision");
+    await assert.rejects(() => reposB.decisions.confirm(decisionId, snapshot), (e: unknown) => (e as { code?: string }).code === "NOT_FOUND");
+    verified.push("foreign-owner confirmation denied");
     const preserved = await reposA.decisions.get(decisionId);
     assert.equal(preserved?.raw_input, rawInput);
     assert.deepEqual(preserved?.confirmed_snapshot, snapshot);

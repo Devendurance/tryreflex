@@ -22,7 +22,34 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 
 const notRecorded = <span className="text-muted">Not recorded</span>;
 
-export function ConfirmedSnapshot({ snapshot }: { snapshot: Snapshot }) {
+function OriginProvenance({ snapshot, origins }: { snapshot: Snapshot; origins: DecisionRecord["origins"] }) {
+  const confirmed = new Set(origins.filter((origin) => origin.basis === "user_confirmed").map((origin) => origin.label));
+  const unselected = [...new Set(origins.filter((origin) => origin.basis === "inference" && !snapshot.origins.includes(origin.label)).map((origin) => origin.label))];
+  return (
+    <div className="flex flex-col gap-2">
+      <ul className="flex flex-wrap gap-2">
+        {snapshot.origins.map((label) => (
+          <li key={label}>
+            <Tag tone="confirmed">
+              {ORIGINS[label].name}
+              {confirmed.has(label) ? " (confirmed by you)" : ""}
+            </Tag>
+          </li>
+        ))}
+      </ul>
+      {confirmed.size === 0 && (
+        <p className="t-caption">Confirmed before Reflex recorded origin provenance. Learning only uses Reflex&rsquo;s suggestions for this decision, and they stay labelled as inferred.</p>
+      )}
+      {unselected.length > 0 && (
+        <p className="t-caption">
+          Reflex also suggested {unselected.map((label) => ORIGINS[label].name).join(", ")}. You didn&rsquo;t select {unselected.length === 1 ? "it" : "them"}, so {unselected.length === 1 ? "it stays" : "they stay"} a model suggestion and {unselected.length === 1 ? "isn't" : "aren't"} treated as your origin.
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function ConfirmedSnapshot({ snapshot, origins }: { snapshot: Snapshot; origins?: DecisionRecord["origins"] }) {
   const value = (v: string | undefined) => (v ? v : notRecorded);
   return (
     <Panel id="snapshot-title" title="Your confirmed decision" aside={<Tag tone="confirmed">Confirmed by you</Tag>}>
@@ -49,7 +76,7 @@ export function ConfirmedSnapshot({ snapshot }: { snapshot: Snapshot }) {
         <Fact label="Thesis">{value(snapshot.thesis)}</Fact>
         <Fact label="Catalyst">{value(snapshot.catalyst)}</Fact>
         <Fact label="Invalidation">{value(snapshot.invalidation)}</Fact>
-        <Fact label="Origin">{snapshot.origins.map((origin) => ORIGINS[origin].name).join(", ")}</Fact>
+        <Fact label="Origin">{origins ? <OriginProvenance snapshot={snapshot} origins={origins} /> : snapshot.origins.map((origin) => ORIGINS[origin].name).join(", ")}</Fact>
       </dl>
       <div className="mt-4 border-t border-hairline pt-4">
         <h3 className="t-eyebrow">Sources</h3>
@@ -181,7 +208,7 @@ export function DecisionDetail({ id }: { id: string }) {
       )}
       {confirmed ? (
         <>
-          <ConfirmedSnapshot snapshot={decision.confirmedSnapshot!} />
+          <ConfirmedSnapshot snapshot={decision.confirmedSnapshot!} origins={record.origins} />
           <TradeEvidence decisionId={decision.id} snapshot={decision.confirmedSnapshot!} />
           <RawInput text={decision.rawInput} />
           <InferencePanel record={record} />

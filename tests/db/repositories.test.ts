@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { UnauthenticatedError, type AuthContext } from "../../src/server/auth/context";
 import type { DbSession, Queryable } from "../../src/server/db/client";
-import { RepositoryError, createRepositories } from "../../src/server/db/repositories";
+import { RepositoryError, USER_CONFIRMED_ORIGIN_EXPLANATION, createRepositories } from "../../src/server/db/repositories";
 
 const USER_ID = "123e4567-e89b-42d3-a456-426614174000";
 const OTHER_ID = "bbbbbbbb-2222-4333-8444-cccccccccccc";
@@ -114,7 +114,7 @@ test("confirm runs lock, update, revision insert in one transaction", async () =
   const texts = session.calls.map((c) => c.text);
   assert.deepEqual(
     texts.map((t) => (t.startsWith("SELECT * FROM public.decisions") ? "LOCK" : t.startsWith("UPDATE") ? "UPDATE" : t.startsWith("INSERT") ? "INSERT" : t)),
-    ["BEGIN", "LOCK", "UPDATE", "INSERT", "COMMIT"],
+    ["BEGIN", "LOCK", "UPDATE", "INSERT", "INSERT", "COMMIT"],
   );
   const update = session.calls[2];
   assert.match(update.text, /UPDATE public\.decisions SET status='confirmed', confirmed_snapshot=\$3, confirmed_at=now\(\)/);
@@ -122,6 +122,62 @@ test("confirm runs lock, update, revision insert in one transaction", async () =
   const revision = session.calls[3];
   assert.match(revision.text, /INSERT INTO public\.decision_revisions/);
   assert.match(revision.text, /VALUES\(\$1,\$2,1,\$3,\$4\)/);
+});
+
+const originInserts = (session: FakeSession) =>
+  session.calls.filter((c) => c.text.startsWith("INSERT INTO public.decision_origins"));
+
+test("initial confirm records each selected origin once as user_confirmed inside the same transaction", async () => {
+  const session = fakeSession((text) => (text.includes("FOR UPDATE") ? [{ status: "draft" }] : [{ ok: true }]));
+  const repos = createRepositories(session, auth);
+  await repos.decisions.confirm(OTHER_ID, { ...VALID_SNAPSHOT, origins: ["social_confirmation", "social_confirmation"] });
+  const inserts = originInserts(session);
+  assert.equal(inserts.length, 1);
+  assert.match(inserts[0].text, /VALUES\(\$1,\$2,\$3,\$4,NULL,'user_confirmed'\)$/);
+  assert.deepEqual(inserts[0].values, [USER_ID, OTHER_ID, "social_confirmation", USER_CONFIRMED_ORIGIN_EXPLANATION]);
+  const texts = session.calls.map((c) => c.text);
+  assert.ok(texts.indexOf("BEGIN") < texts.indexOf(inserts[0].text));
+  assert.ok(texts.indexOf(inserts[0].text) < texts.indexOf("COMMIT"));
+  assert.ok(!session.calls.some((c) => /UPDATE public\.decision_origins|DELETE/.test(c.text)), "inferred origins are never rewritten");
+});
+
+test("origin insert failure rolls back the whole confirmation", async () => {
+  const session = fakeSession((text) => {
+    if (text.includes("FOR UPDATE")) return [{ status: "draft" }];
+    if (text.startsWith("INSERT INTO public.decision_origins")) throw new Error("unique violation");
+    return [{ ok: true }];
+  });
+  const repos = createRepositories(session, auth);
+  await assert.rejects(() => repos.decisions.confirm(OTHER_ID, VALID_SNAPSHOT));
+  assert.equal(session.calls.at(-1)?.text, "ROLLBACK");
+  assert.ok(!session.calls.some((c) => c.text === "COMMIT"));
+});
+
+test("repeated identical confirm is idempotent and records no further origins or versions", async () => {
+  const session = fakeSession((text) => (text.includes("FOR UPDATE") ? [{ status: "confirmed", confirmed_snapshot: VALID_SNAPSHOT }] : [{ ok: true }]));
+  const repos = createRepositories(session, auth);
+  const result = await repos.decisions.confirm(OTHER_ID, VALID_SNAPSHOT);
+  assert.equal(result.idempotent, true);
+  assert.equal(originInserts(session).length, 0);
+  assert.ok(!session.calls.some((c) => c.text.startsWith("INSERT")));
+});
+
+test("later corrections and revisions never add or rewrite confirmed origins", async () => {
+  const corrected = fakeSession((text) => {
+    if (text.includes("FOR UPDATE")) return [{ status: "confirmed", confirmed_snapshot: VALID_SNAPSHOT }];
+    if (text.includes("MAX(version)")) return [{ version: 2 }];
+    return [{ version: 2 }];
+  });
+  await createRepositories(corrected, auth).decisions.confirm(OTHER_ID, { ...VALID_SNAPSHOT, origins: ["pure_impulse"] });
+  assert.equal(originInserts(corrected).length, 0);
+  assert.ok(corrected.calls.some((c) => c.text.startsWith("INSERT INTO public.decision_revisions")));
+
+  const revised = fakeSession((text) => {
+    if (text.includes("FOR UPDATE")) return [{ status: "confirmed" }];
+    return [{ version: 3 }];
+  });
+  await createRepositories(revised, auth).decisions.appendRevision(OTHER_ID, { snapshot: { ...VALID_SNAPSHOT, origins: ["pure_impulse"] }, reason: "later view" });
+  assert.equal(originInserts(revised).length, 0);
 });
 
 test("confirm rejects non-draft decision and rolls back", async () => {
