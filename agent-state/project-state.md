@@ -16,7 +16,7 @@ Last updated: 2026-10-08
 - Tailwind CSS 4, ESLint 9
 - App Router, `src/` directory, import alias `@/*`, Turbopack
 - Package manager: npm
-- Git repo initialized locally, no remote configured
+- Git repo on branch main, remote origin https://github.com/Devendurance/tryreflex.git, pushed through bf2694a
 
 ## Dependencies added beyond the scaffold
 
