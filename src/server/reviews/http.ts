@@ -32,6 +32,7 @@ export function createGenerateReviewHandler(deps: ReviewRouteDeps = {}) {
         dimensions: result.dimensions,
         decisionQuality: result.decisionQuality,
         classification: result.classification,
+        planDrift: result.planDrift,
         runId: result.runId,
       });
     } catch (error) {

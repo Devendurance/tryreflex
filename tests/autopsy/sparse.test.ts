@@ -6,8 +6,13 @@ import test from "node:test";
 import type { AuthContext } from "../../src/server/auth/context";
 import type { DbSession, Queryable } from "../../src/server/db/client";
 import { decisionSnapshotSchema } from "../../src/server/db/validation";
-import { computeSparseManualMetrics } from "../../src/server/review-policy";
+import {
+  computeSparseManualMetrics,
+  SPARSE_AUTOPSY_PROMPT_VERSION,
+  SPARSE_AUTOPSY_SYSTEM_PROMPT,
+} from "../../src/server/review-policy";
 import { TradeError } from "../../src/server/trades/errors";
+import { AIError } from "../../src/server/ai/errors";
 import { normalizeBitgetReadFailure } from "../../src/server/trades/diagnostics";
 import { createTradeRepository } from "../../src/server/trades/repository";
 import { attachManualTrade } from "../../src/server/trades/service";
@@ -452,7 +457,7 @@ test("decision snapshot accepts plan fields and rejects retrospective comments",
   assert.equal(withComments.success, false);
 });
 
-test("sparse review uses v2 prompt, keeps outcome unknown, separates retrospective evidence", async () => {
+test("sparse review uses v11 prompt, keeps outcome unknown, separates retrospective evidence", async () => {
   const { generateReview } = await import("../../src/server/reviews/service");
   const { REVIEW_DIMENSIONS } = await import("../../src/server/review-policy");
   const captured: { input: string; promptVersion: string; system: string }[] = [];
@@ -469,18 +474,22 @@ test("sparse review uses v2 prompt, keeps outcome unknown, separates retrospecti
       validate?: (v: unknown) => void;
     }) {
       captured.push(request);
+      const quoteCatalog = (
+        JSON.parse(request.input) as { quoteCatalog: { quoteRef: string; evidenceId: string; quote: string }[] }
+      ).quoteCatalog;
+      const evQuote = quoteCatalog.find((q) => q.evidenceId === EV)?.quoteRef ?? quoteCatalog[0].quoteRef;
       const value = {
         dimensions: REVIEW_DIMENSIONS.map((d) => ({
           dimension: d,
           score: null,
           explanation: "insufficient evidence",
           confidence: 0,
-          evidenceRefs: [],
           observedFacts: [],
           inferredFindings: [],
         })),
         summary: "insufficient evidence for assessment",
-        lessons: [{ text: "record execution details at decision time", evidenceRefs: [EV] }],
+        lessons: [{ text: "record execution details at decision time", supportQuotes: [evQuote] }],
+        planDriftLessons: [],
       };
       request.validate?.(value);
       return {
@@ -568,18 +577,31 @@ test("sparse review uses v2 prompt, keeps outcome unknown, separates retrospecti
     },
   };
   const result = await generateReview(repo as never, llm as never, { tradeId: TRADE_ID });
-  assert.equal(captured[0].promptVersion, "decision-autopsy.v2");
-  assert.ok(captured[0].system.includes("sparse retail evidence rules"));
-  const input = JSON.parse(captured[0].input) as { evidenceCatalog: { kind: string; text: string }[] };
-  const retro = input.evidenceCatalog.find((e) => e.text.includes("after_the_fact"));
+  assert.equal(captured[0].promptVersion, "decision-autopsy.v11");
+  assert.equal(
+    (JSON.parse(captured[0].input) as { verifiedDecisionTimeContextAvailable: boolean })
+      .verifiedDecisionTimeContextAvailable,
+    false,
+    "no owned context rows means the flag is false",
+  );
+  assert.ok(captured[0].system.includes("sparse retail process reviewer"));
+  const input = JSON.parse(captured[0].input) as {
+    evidenceCatalog: { id: string; kind: string }[];
+    quoteCatalog: { quoteRef: string; evidenceId: string; quote: string }[];
+  };
+  assert.ok(input.evidenceCatalog.every((e) => typeof e.id === "string" && typeof e.kind === "string" && !("text" in e)));
+  const retro = input.quoteCatalog.find((q) => q.quote.includes("after_the_fact"));
   assert.ok(retro, "retrospective observations must appear as separate evidence");
-  assert.ok(retro.text.includes("i remember it roughly tripled"));
-  const tradeEntry = input.evidenceCatalog.find((e) => e.text.includes("provider: manual"));
+  assert.ok(input.quoteCatalog.some((q) => q.quote.includes("i remember it roughly tripled")));
+  const tradeEntry = input.quoteCatalog.find((q) => q.quote === "provider: manual");
   assert.ok(tradeEntry !== undefined);
-  assert.ok(!tradeEntry.text.includes("null"), "unknown execution fields must not be quoted");
+  assert.ok(
+    !input.quoteCatalog.some((q) => q.quote === "quantity: null" || q.quote === "entry_price: null"),
+    "unknown execution fields must not be quoted",
+  );
   assert.ok(
     !captured[0].input.includes("proceedsReceived") &&
-      !input.evidenceCatalog.some((e) => e.text.includes("user_reported_proceeds_received")),
+      !input.quoteCatalog.some((q) => q.quote.includes("user_reported_proceeds_received")),
     "money amounts must not be injected into the process catalog",
   );
   const metrics = persisted[0].observedMetrics.tradeMetrics as Record<string, unknown>;
@@ -587,6 +609,28 @@ test("sparse review uses v2 prompt, keeps outcome unknown, separates retrospecti
   assert.equal(metrics.netRealizedPnl, null);
   assert.equal(metrics.captureTiming, "retrospective");
   assert.equal(result.classification, null);
+});
+
+test("sparse prompt v11 keeps grading guards without the duplicated base text", () => {
+  assert.equal(SPARSE_AUTOPSY_PROMPT_VERSION, "decision-autopsy.v11");
+  const prompt = SPARSE_AUTOPSY_SYSTEM_PROMPT;
+  assert.ok(prompt.includes("Return exactly one planDriftLessons entry for each supplied drift"));
+  assert.ok(prompt.includes("If verifiedDecisionTimeContextAvailable=false, context_awareness must be unassessed"));
+  assert.ok(prompt.includes("Do not use greed or greedy in generated summaries"));
+  assert.ok(prompt.includes("inferred findings and lessons cite supportQuotes arrays of quoteCatalog keys"));
+  assert.ok(prompt.includes("Never write evidenceId, quote, or evidenceRefs in the wire response"));
+  assert.ok(prompt.includes("select an observedFacts key from that finding's behaviorQuoteRefs"));
+  assert.ok(
+    prompt.includes("Assess the clarity/actionability of a documented risk rule from its wording separately from unknown execution adherence"),
+  );
+  assert.ok(prompt.includes("Wire observedFacts contain only {quoteRef}"));
+  assert.ok(
+    prompt.includes("never realized return, realized loss, financial cost, investment performance, or money left on the table"),
+  );
+  assert.ok(prompt.includes("Bare 'Stick to your plan.', 'Do more research.', or 'Control greed.' are rejected."));
+  assert.ok(prompt.includes("diagnose psychological/medical conditions"));
+  assert.ok(prompt.includes("Context awareness requires verified decision-time conditions; when unavailable, abstain"));
+  assert.ok(!prompt.includes("evidence-backed trading-process reviewer"), "compact sparse prompt does not embed the v1 base");
 });
 
 test("agentkey: missing credential is a configuration failure, not a network call", async () => {
@@ -863,6 +907,7 @@ test("diagnostics redact secrets and preserve provider and http codes without in
 async function runSparseReview(
   snapshotOverrides: Record<string, unknown>,
   observations: Record<string, unknown>,
+  options: { contextScore?: number; captured?: string[] } = {},
 ) {
   const { generateReview } = await import("../../src/server/reviews/service");
   const { REVIEW_DIMENSIONS } = await import("../../src/server/review-policy");
@@ -871,19 +916,27 @@ async function runSparseReview(
     generateText: async () => {
       throw new Error("unused");
     },
-    async generateStructured(request: { validate?: (v: unknown) => void; promptVersion: string }) {
+    async generateStructured(request: {
+      input: string;
+      validate?: (v: unknown) => void;
+      promptVersion: string;
+    }) {
+      options.captured?.push(request.input);
+      const evQuote = (
+        JSON.parse(request.input) as { quoteCatalog: { quoteRef: string; evidenceId: string }[] }
+      ).quoteCatalog.find((q) => q.evidenceId === EV)?.quoteRef;
       const value = {
         dimensions: REVIEW_DIMENSIONS.map((d) => ({
           dimension: d,
-          score: null,
+          score: d === "context_awareness" && options.contextScore !== undefined ? options.contextScore : null,
           explanation: "insufficient evidence",
           confidence: 0,
-          evidenceRefs: [],
           observedFacts: [],
           inferredFindings: [],
         })),
         summary: "insufficient evidence",
-        lessons: [{ text: "record execution details", evidenceRefs: [EV] }],
+        lessons: evQuote === undefined ? [] : [{ text: "record execution details", supportQuotes: [evQuote] }],
+        planDriftLessons: [],
       };
       request.validate?.(value);
       return { value, provider: "groq", model: "m", promptVersion: request.promptVersion, runId: "r", attempts: 1 };
@@ -999,6 +1052,43 @@ test("same declared currency allows the target comparison", async () => {
     },
   );
   assert.equal(metrics.exitVsTargetMarketCapMultiple, "1");
+});
+
+test("a scored context dimension fails when no verified decision-time context exists", async () => {
+  const captured: string[] = [];
+  await assert.rejects(
+    () =>
+      runSparseReview(
+        { intendedTakeProfitMarketCap: "300000", marketCapCurrency: "USD" },
+        {
+          entryMarketCap: "100000",
+          exitMarketCap: "300000",
+          marketCapCurrency: "USD",
+          executionState: "unknown",
+          cashFlowBasis: "unknown",
+          captureBasis: "retrospective",
+        },
+        { contextScore: 20, captured },
+      ),
+    (error) => error instanceof AIError && error.code === "GROUNDING",
+  );
+  assert.equal(
+    (JSON.parse(captured[0]) as { verifiedDecisionTimeContextAvailable: boolean })
+      .verifiedDecisionTimeContextAvailable,
+    false,
+  );
+  const metrics = await runSparseReview(
+    { intendedTakeProfitMarketCap: "300000", marketCapCurrency: "USD" },
+    {
+      entryMarketCap: "100000",
+      exitMarketCap: "300000",
+      marketCapCurrency: "USD",
+      executionState: "unknown",
+      cashFlowBasis: "unknown",
+      captureBasis: "retrospective",
+    },
+  );
+  assert.equal(metrics.marketCapMovementMultiple, "3");
 });
 
 type RpcCall = { method: string; params: Record<string, unknown> };

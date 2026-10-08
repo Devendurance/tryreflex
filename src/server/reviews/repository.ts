@@ -9,6 +9,16 @@ type Row = Record<string, unknown>;
 
 const uuidSchema = z.string().uuid();
 
+const planDriftRefsSchema = z.array(
+  z.looseObject({ evidenceRefs: z.array(z.string().uuid()).min(1).max(10) }),
+).max(5);
+
+function planDriftRefs(planDrift: unknown): string[] {
+  const parsed = planDriftRefsSchema.safeParse(planDrift ?? []);
+  if (!parsed.success) throw new RepositoryError("plan drift findings failed validation", "INVALID_INPUT");
+  return [...new Set(parsed.data.flatMap((finding) => finding.evidenceRefs))];
+}
+
 export interface ReviewDimensionPersist {
   dimension: string;
   score: number | null;
@@ -138,6 +148,7 @@ export function createReviewRepository(db: DbSession, authContext: AuthContext) 
     ) {
       throw new RepositoryError("review payload failed validation", "INVALID_INPUT");
     }
+    const planRefs = planDriftRefs(input.observedMetrics.planDrift);
     return db.transaction(async (q) => {
       const locked = await q.query<Row>(
         `SELECT * FROM public.trades WHERE user_id=$1 AND id=$2 FOR UPDATE`,
@@ -156,6 +167,15 @@ export function createReviewRepository(db: DbSession, authContext: AuthContext) 
       if (!decision) throw new RepositoryError("decision not found", "NOT_FOUND");
       if (decision.status !== "confirmed" && decision.status !== "closed") {
         throw new RepositoryError("decision is not reviewable", "CONFLICT");
+      }
+      if (planRefs.length > 0) {
+        const planEvidence = await q.query<Row>(
+          `SELECT id FROM public.evidence_records WHERE user_id=$1 AND id=ANY($2::uuid[]) AND (decision_id=$3 OR trade_id=$4)`,
+          [userId, planRefs, input.decisionId, input.tradeId],
+        );
+        if (planEvidence.rows.length !== planRefs.length) {
+          throw new RepositoryError("plan drift evidence not found", "NOT_FOUND");
+        }
       }
       const versionResult = await q.query<{ version: number }>(
         `SELECT COALESCE(MAX(version),0)+1 AS version FROM public.reviews WHERE user_id=$1 AND trade_id=$2`,
@@ -213,13 +233,16 @@ export function createReviewRepository(db: DbSession, authContext: AuthContext) 
     decision: Row | null;
     dimensions: Row[];
     evidenceLinks: Row[];
+    planDriftEvidence?: Row[];
   }> {
     const reviewResult = await db.query<Row>(
       `SELECT * FROM public.reviews WHERE user_id=$1 AND id=$2 LIMIT 1`,
       [userId, id],
     ).catch(mapPersistenceError);
     const review = reviewResult.rows[0] ?? null;
-    if (!review) return { review: null, trade: null, decision: null, dimensions: [], evidenceLinks: [] };
+    if (!review) return { review: null, trade: null, decision: null, dimensions: [], evidenceLinks: [], planDriftEvidence: [] };
+    const metrics = jsonObjectSchema.safeParse(review.observed_metrics).success ? (review.observed_metrics as Row) : {};
+    const refs = planDriftRefs(metrics.planDrift);
     const [trade, decision, dimensions] = await Promise.all([
       db.query<Row>(`SELECT * FROM public.trades WHERE user_id=$1 AND id=$2 LIMIT 1`, [userId, review.trade_id]),
       db.query<Row>(`SELECT * FROM public.decisions WHERE user_id=$1 AND id=$2 LIMIT 1`, [userId, review.decision_id]),
@@ -233,12 +256,24 @@ export function createReviewRepository(db: DbSession, authContext: AuthContext) 
             `SELECT l.dimension_id,e.* FROM public.review_dimension_evidence l JOIN public.evidence_records e ON e.user_id=l.user_id AND e.id=l.evidence_id WHERE l.user_id=$1 AND l.dimension_id=ANY($2::uuid[]) ORDER BY l.dimension_id,e.id`,
             [userId, dimensionIds],
           ).catch(mapPersistenceError);
+    let planDriftEvidence: Row[] = [];
+    if (refs.length > 0) {
+      const planEvidence = await db.query<Row>(
+        `SELECT * FROM public.evidence_records WHERE user_id=$1 AND id=ANY($2::uuid[]) AND (decision_id=$3 OR trade_id=$4) ORDER BY id`,
+        [userId, refs, review.decision_id, review.trade_id],
+      ).catch(mapPersistenceError);
+      if (planEvidence.rows.length !== refs.length) {
+        throw new RepositoryError("plan drift evidence not found", "NOT_FOUND");
+      }
+      planDriftEvidence = planEvidence.rows;
+    }
     return {
       review,
       trade: trade.rows[0] ?? null,
       decision: decision.rows[0] ?? null,
       dimensions: dimensions.rows,
       evidenceLinks: links.rows,
+      planDriftEvidence,
     };
   }
 

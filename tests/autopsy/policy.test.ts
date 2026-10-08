@@ -81,7 +81,7 @@ function allScores(value: number | null) {
 test("all scores 70 yields overall 70 and good-process classifications", () => {
   const quality = computeDecisionQuality(allScores(70));
   assert.equal(quality.overallScore, 70);
-  assert.equal(quality.status, "assessed");
+  assert.equal(quality.status, "final");
   assert.equal(classifyProcessOutcome(quality.overallScore, "positive"), "earned_win");
   assert.equal(classifyProcessOutcome(quality.overallScore, "negative"), "good_decision_bad_outcome");
 });
@@ -93,13 +93,26 @@ test("all scores 69 yields weak-process classifications", () => {
   assert.equal(classifyProcessOutcome(quality.overallScore, "negative"), "deserved_loss");
 });
 
-test("any null dimension makes overall null and classification null", () => {
+test("a null dimension above the coverage floor yields a normalized provisional score", () => {
   const scores = allScores(80);
   scores.behavioral_control = null;
   const quality = computeDecisionQuality(scores);
+  assert.equal(quality.score, 80);
+  assert.equal(quality.overallScore, 80);
+  assert.equal(quality.evidenceCoveragePct, 85);
+  assert.equal(quality.coveragePct, 85);
+  assert.equal(quality.status, "provisional");
+});
+
+test("coverage below 70 percent keeps the score null and unassessed", () => {
+  const scores = allScores(80);
+  scores.context_awareness = null;
+  scores.execution_quality = null;
+  const quality = computeDecisionQuality(scores);
+  assert.equal(quality.score, null);
   assert.equal(quality.overallScore, null);
-  assert.equal(quality.status, "insufficient_evidence");
-  assert.equal(classifyProcessOutcome(quality.overallScore, "positive"), null);
+  assert.equal(quality.status, "unassessed");
+  assert.equal(quality.evidenceCoveragePct, 65);
 });
 
 test("invalid scores are rejected", () => {

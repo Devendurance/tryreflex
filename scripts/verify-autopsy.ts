@@ -6,6 +6,7 @@ import { createMemoryStore } from "../src/server/ai/memory-store";
 import { buildMemoryText } from "../src/server/ai/memory-text";
 import { JinaEmbeddingProvider } from "../src/server/ai/jina";
 import { GroqLLMProvider } from "../src/server/ai/groq";
+import { targetDriftMetrics, type TargetDriftFinding } from "../src/server/reviews/plan-drift";
 import { loadEnvConfig } from "@next/env";
 import { Client } from "pg";
 import { z } from "zod";
@@ -178,7 +179,9 @@ async function main(): Promise<void> {
       assert.equal(read.review.metrics.tradeMetrics.quantity, record.quantity);
       assert.equal(read.review.metrics.tradeMetrics.entryPrice, record.entry_price);
     }
-    assert.equal(generated.classification, classifyProcessOutcome(quality.overallScore, expectedMetrics.outcome as Parameters<typeof classifyProcessOutcome>[1]));
+    assert.deepEqual(generated.decisionQuality, quality);
+    assert.deepEqual(read.review.decisionQuality, quality);
+    assert.equal(generated.classification, classifyProcessOutcome(quality.status === "final" ? quality.score : null, expectedMetrics.outcome as Parameters<typeof classifyProcessOutcome>[1]));
     assert.deepEqual(record.confirmed_snapshot, snapshot);
     for (const [key, column] of [["quantity", "quantity"], ["entryPrice", "entry_price"], ["exitPrice", "exit_price"], ["openedAt", "opened_at"], ["closedAt", "closed_at"], ["realizedPnl", "realized_pnl"]] as const) {
       if (genuine.trade[key] == null) assert.equal(record[column], null);
@@ -192,6 +195,24 @@ async function main(): Promise<void> {
       "SELECT bool_and(e.user_id=$1) AS owner_valid,count(*)::int AS count FROM public.review_dimension_evidence l JOIN public.review_dimensions dim ON dim.user_id=l.user_id AND dim.id=l.dimension_id JOIN public.evidence_records e ON e.user_id=l.user_id AND e.id=l.evidence_id WHERE dim.user_id=$1 AND dim.review_id=$2", [owner.userId, reviewId],
     );
     if (links.rows[0].count > 0) assert.equal(links.rows[0].owner_valid, true);
+    assert.ok(Array.isArray(read.review.planDrift));
+    const planDrift = read.review.planDrift as TargetDriftFinding[];
+    assert.deepEqual(planDrift, generated.planDrift);
+    const driftRefs = [...new Set(planDrift.flatMap((finding) => finding.evidenceRefs))];
+    if (driftRefs.length > 0) {
+      const ownedDrift = await client.query("SELECT id FROM public.evidence_records WHERE user_id=$1 AND id=ANY($2::uuid[]) AND (decision_id=$3 OR trade_id=$4)", [owner.userId, driftRefs, decisionId, tradeId]);
+      assert.equal(ownedDrift.rows.length, driftRefs.length);
+    }
+    for (const finding of planDrift) {
+      assert.equal(finding.type, "target_drift");
+      assert.equal(finding.evidenceBasis, "retrospective_user_report");
+      assert.equal(decimalUnits(finding.originalPlan.value), decimalUnits(record.confirmed_snapshot.intendedTakeProfitMarketCap));
+      assert.deepEqual(finding.metrics, targetDriftMetrics(finding.originalPlan.value, finding.revisedPlan.value, finding.observations.peakMarketCap, finding.observations.exitMarketCap));
+      for (const fact of [...finding.observedFacts, { evidenceId: finding.ordering.evidenceId, quote: finding.ordering.quote }]) {
+        const source = read.review.evidence.find((entry: { evidenceId: string }) => entry.evidenceId === fact.evidenceId);
+        assert.ok(source && typeof source.text === "string" && source.text.includes(fact.quote));
+      }
+    }
     const run = await client.query("SELECT model,pipeline,prompt_version,status FROM public.ai_runs WHERE user_id=$1 AND id=$2", [owner.userId, runId]);
     assert.equal(run.rows[0]?.pipeline, "decision-autopsy");
     assert.equal(run.rows[0]?.status, "success");
@@ -203,7 +224,7 @@ async function main(): Promise<void> {
       confirmedSnapshot: record.confirmed_snapshot, tradeSummary: read.review.trade,
       context: { status: "unavailable", reason: "No time-aligned decision context attached by this verifier. Current enrichment is not historical evidence." },
       deterministicMetrics: read.review.metrics.tradeMetrics, decisionQuality: quality, outcome: expectedMetrics.outcome,
-      classification: generated.classification, dimensionResults: read.review.dimensions,
+      classification: generated.classification, dimensionResults: read.review.dimensions, planDrift,
       summary: read.review.summary, lessons: read.review.lessons, evidence: read.review.evidence,
       evidenceLinks: links.rows[0].count, foreignRead: 404, originalSnapshotPreserved: true,
       unavailableDimensions: read.review.dimensions.filter((dimension: { score: unknown }) => dimension.score === null).map((dimension: { dimension: string; explanation: string }) => ({ dimension: dimension.dimension, explanation: dimension.explanation })),
@@ -216,7 +237,7 @@ async function main(): Promise<void> {
       const memory = createMemoryStore(repos, embedder);
       const canonical = buildMemoryText({
         kind: "review", assetSymbol: genuine.trade.symbol,
-        findings: [read.review.summary, ...read.review.dimensions.map((dimension: { explanation: string }) => dimension.explanation), ...read.review.lessons.map((lesson: { text: string }) => lesson.text)],
+        findings: [read.review.summary, ...read.review.dimensions.map((dimension: { explanation: string }) => dimension.explanation), ...read.review.lessons.map((lesson: { text: string }) => lesson.text), ...planDrift.map((finding) => finding.explanation), ...planDrift.flatMap((finding) => finding.userSelfAssessment.map((assessment) => `User retrospective self-assessment: ${assessment.text}`))],
         ...(generated.classification === null ? {} : { processClassification: generated.classification }),
       });
       const stored = await memory.storeDocument({ entityType: "review", entityId: reviewId, sourceText: canonical.text, metadata: { textVersion: canonical.version } });

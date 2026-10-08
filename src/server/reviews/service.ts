@@ -20,6 +20,7 @@ import {
   type ReviewDimension,
 } from "../review-policy";
 import { TradeError } from "../trades/errors";
+import { assertDriftNarratives, assertSpecificDriftLessons, detectTargetDrift, type TargetDriftFinding } from "./plan-drift";
 import type { createReviewRepository } from "./repository";
 
 type ReviewRepository = ReturnType<typeof createReviewRepository>;
@@ -77,6 +78,59 @@ interface CatalogEntry {
   id: string;
   kind: string;
   text: string;
+}
+
+export interface AutopsyQuote { quoteRef: string; evidenceId: string; quote: string }
+
+export function groundedAutopsySchema(catalog: readonly { id: string; text: string }[], planDrift: readonly TargetDriftFinding[] = []) {
+  if (catalog.length === 0) throw new AIError("SCHEMA");
+  const quoteCatalog: AutopsyQuote[] = catalog.flatMap((entry) => {
+    const pieces = entry.text.split(/\r?\n/).flatMap((line) => line.split(/(?<=[.!?])\s+/)).map((quote) => quote.trim());
+    const quotes = [...new Set(pieces.filter((quote) => quote.length > 0 && quote.length <= 1000 && entry.text.includes(quote)))].slice(0, 40);
+    if (quotes.length === 0) throw new AIError("SCHEMA");
+    return quotes.map((quote) => ({ evidenceId: entry.id, quote }));
+  }).map((quote, index) => ({ quoteRef: `q${index}`, ...quote }));
+  const selector = z.enum(quoteCatalog.map((quote) => quote.quoteRef) as [string, ...string[]]);
+  const fact = z.strictObject({ quoteRef: selector });
+  const schema = autopsySchema.extend({
+    dimensions: z.array(dimensionEntrySchema.omit({ evidenceRefs: true }).extend({
+      observedFacts: z.array(fact),
+      inferredFindings: z.array(dimensionEntrySchema.shape.inferredFindings.element.omit({ evidenceRefs: true }).extend({ supportQuotes: z.array(selector).min(1) })),
+    })).length(5),
+    lessons: z.array(autopsySchema.shape.lessons.element.omit({ evidenceRefs: true }).extend({ supportQuotes: z.array(selector).min(1) })),
+    planDriftLessons: z.array(z.strictObject({ text: z.string().min(1).max(1000) })).length(planDrift.length),
+  });
+  return { schema, quoteCatalog };
+}
+
+export function resolveAutopsyQuotes(value: unknown, quoteCatalog: readonly AutopsyQuote[], planDrift: readonly TargetDriftFinding[] = []): AutopsyResult {
+  const support = z.array(z.string().min(1)).min(1);
+  const wire = autopsySchema.extend({
+    dimensions: z.array(dimensionEntrySchema.omit({ evidenceRefs: true }).extend({
+      observedFacts: z.array(z.strictObject({ quoteRef: z.string().min(1) })),
+      inferredFindings: z.array(dimensionEntrySchema.shape.inferredFindings.element.omit({ evidenceRefs: true }).extend({ supportQuotes: support })),
+    })).length(5),
+    lessons: z.array(autopsySchema.shape.lessons.element.omit({ evidenceRefs: true }).extend({ supportQuotes: support })),
+    planDriftLessons: z.array(z.strictObject({ text: z.string().min(1).max(1000) })).length(planDrift.length),
+  }).parse(value);
+  const byRef = new Map(quoteCatalog.map((quote) => [quote.quoteRef, quote]));
+  const sourceFor = (ref: string) => {
+    const source = byRef.get(ref);
+    if (!source) throw new AIError("GROUNDING");
+    return source;
+  };
+  const refsFor = (keys: readonly string[]) => [...new Set(keys.map((key) => sourceFor(key).evidenceId))];
+  return autopsySchema.parse({ summary: wire.summary,
+    dimensions: wire.dimensions.map((dimension) => {
+      const observedFacts = dimension.observedFacts.map(({ quoteRef }) => {
+        const source = sourceFor(quoteRef);
+        return { evidenceId: source.evidenceId, quote: source.quote };
+      });
+      const inferredFindings = dimension.inferredFindings.map(({ finding, supportQuotes }) => ({ finding, evidenceRefs: refsFor(supportQuotes) }));
+      return { ...dimension, inferredFindings, observedFacts, evidenceRefs: [...new Set([...observedFacts.map((fact) => fact.evidenceId), ...inferredFindings.flatMap((finding) => finding.evidenceRefs)])] };
+    }),
+    lessons: [...wire.lessons.map(({ text, supportQuotes }) => ({ text, evidenceRefs: refsFor(supportQuotes) })), ...wire.planDriftLessons.map(({ text }, index) => ({ text, evidenceRefs: [...planDrift[index].evidenceRefs] }))],
+  });
 }
 
 function isRecord(value: unknown): value is Row {
@@ -314,7 +368,7 @@ export async function generateReview(
   repo: ReviewRepository,
   llm: LLMProvider,
   input: unknown,
-): Promise<{ review: Row; dimensions: Row[]; decisionQuality: Record<string, unknown>; classification: string | null; runId: string }> {
+): Promise<{ review: Row; dimensions: Row[]; decisionQuality: Record<string, unknown>; classification: string | null; runId: string; planDrift: TargetDriftFinding[] }> {
   const parsed = z.strictObject({ tradeId: z.string().uuid() }).safeParse(input);
   if (!parsed.success) throw new RepositoryError("request failed validation", "INVALID_INPUT");
   const tradeId = parsed.data.tradeId;
@@ -537,22 +591,40 @@ export async function generateReview(
   assertCatalogSize(catalog);
   const catalogById = new Map(catalog.map((entry) => [entry.id, entry]));
   const allowedEvidenceIds = catalog.map((entry) => entry.id);
+  const planDrift = isSparse ? detectTargetDrift(snapshot, observations, catalog) : [];
+  const grounded = isSparse ? groundedAutopsySchema(catalog, planDrift) : null;
 
-  const result = await llm.generateStructured<AutopsyResult>({
+  const result = await llm.generateStructured<unknown>({
     system: isSparse ? SPARSE_AUTOPSY_SYSTEM_PROMPT : AUTOPSY_SYSTEM_PROMPT,
     input: JSON.stringify({
       decisionSnapshot: snapshot,
       captureTiming: metrics.captureTiming,
-      evidenceCatalog: catalog,
+      verifiedDecisionTimeContextAvailable: bundle.contexts.length > 0,
+      evidenceCatalog: grounded ? catalog.map(({ id, kind }) => ({ id, kind })) : catalog,
+      ...(grounded ? { quoteCatalog: grounded.quoteCatalog } : {}),
+      planDrift: grounded ? planDrift.map((finding) => ({
+        ...finding,
+        behaviorQuoteRefs: grounded.quoteCatalog.filter((quote) => quote.evidenceId === finding.ordering.evidenceId && [finding.ordering.quote, finding.observedFacts[1].quote].some((statement) => quote.quote.includes(statement))).map((quote) => quote.quoteRef),
+        originalTargetQuoteRef: grounded.quoteCatalog.find((quote) => quote.evidenceId === finding.observedFacts[0].evidenceId && quote.quote.includes(finding.observedFacts[0].quote))?.quoteRef ?? null,
+      })) : planDrift,
     }),
     pipeline: "decision-autopsy",
     promptVersion: isSparse ? SPARSE_AUTOPSY_PROMPT_VERSION : REVIEW_PROMPT_VERSION,
     inputEntityIds: [String(decision.id), String(trade.id)],
-    schema: autopsySchema,
+    schema: grounded?.schema ?? autopsySchema,
     schemaName: "decision_autopsy",
-    allowedEvidenceIds,
-    validate: (value) => validateAutopsy(value, catalogById),
+    allowedEvidenceIds: grounded ? [] : allowedEvidenceIds,
+    validate: (wireValue) => {
+      const value = grounded ? resolveAutopsyQuotes(wireValue, grounded.quoteCatalog, planDrift) : autopsySchema.parse(wireValue);
+      validateAutopsy(value, catalogById);
+      if (isSparse) {
+        if (bundle.contexts.length === 0 && value.dimensions.some((dimension) => dimension.dimension === "context_awareness" && dimension.score !== null)) throw new AIError("GROUNDING");
+        assertSpecificDriftLessons(value.lessons, planDrift);
+        assertDriftNarratives(value, planDrift);
+      }
+    },
   });
+  const value = grounded ? resolveAutopsyQuotes(result.value, grounded.quoteCatalog, planDrift) : autopsySchema.parse(result.value);
 
   const scores: Record<ReviewDimension, number | null> = {
     research_quality: null,
@@ -561,19 +633,19 @@ export async function generateReview(
     execution_quality: null,
     behavioral_control: null,
   };
-  for (const dimension of result.value.dimensions) {
+  for (const dimension of value.dimensions) {
     scores[dimension.dimension] = dimension.score;
   }
   const decisionQuality = computeDecisionQuality(scores);
   const classification = classifyProcessOutcome(
-    decisionQuality.overallScore,
+    decisionQuality.status === "final" ? decisionQuality.score : null,
     metrics.outcome as Parameters<typeof classifyProcessOutcome>[1],
   );
 
   const aiInference = {
-    summary: result.value.summary,
-    lessons: result.value.lessons,
-    dimensions: result.value.dimensions,
+    summary: value.summary,
+    lessons: value.lessons,
+    dimensions: value.dimensions,
     evidenceCatalog: catalog,
     ai: {
       provider: result.provider,
@@ -582,6 +654,7 @@ export async function generateReview(
       runId: result.runId,
     },
     snapshotBasis: "original_confirmed",
+    observationBasis: isSparse ? "server_catalog_quotes_selected_by_model" : "model_verbatim_quotes",
   };
 
   let persisted: { review: Row; dimensions: Row[] };
@@ -596,6 +669,7 @@ export async function generateReview(
         settlementCurrency: provenance.settlementCurrency,
         timestampBasis: provenance.timestampBasis,
         manualObservations: isSparse ? provenance.manualObservations : null,
+        planDrift,
         evidenceQuality: isSparse
           ? {
               captureBasis,
@@ -605,7 +679,7 @@ export async function generateReview(
           : null,
       },
       aiInference,
-      dimensions: result.value.dimensions.map((dimension) => ({
+      dimensions: value.dimensions.map((dimension) => ({
         dimension: dimension.dimension,
         score: dimension.score,
         explanation: dimension.explanation,
@@ -624,6 +698,7 @@ export async function generateReview(
     decisionQuality,
     classification,
     runId: result.runId,
+    planDrift,
   };
 }
 
@@ -646,6 +721,10 @@ export async function getReview(
     refsByDimension.set(key, list);
     linkedEvidenceIds.add(String(link.id));
   }
+  const driftEvidence = view.planDriftEvidence ?? [];
+  for (const row of driftEvidence) {
+    linkedEvidenceIds.add(String(row.id));
+  }
   const savedDimensions = new Map<string, Row>();
   if (Array.isArray(inference.dimensions)) {
     for (const saved of inference.dimensions) {
@@ -660,7 +739,10 @@ export async function getReview(
     if (isRecord(entry) && typeof entry.id === "string") catalogById.set(entry.id, entry);
   }
   const evidence = [...linkedEvidenceIds].map((id) => {
-    const record = view.evidenceLinks.find((link) => String(link.id) === id) ?? {};
+    const record =
+      view.evidenceLinks.find((link) => String(link.id) === id) ??
+      driftEvidence.find((row) => String(row.id) === id) ??
+      {};
     const catalogEntry = catalogById.get(id);
     return {
       evidenceId: id,
@@ -699,8 +781,10 @@ export async function getReview(
         }
       : null,
     metrics,
+    planDrift: metrics.planDrift ?? [],
     decisionQuality: metrics.decisionQuality ?? null,
     ai: isRecord(inference.ai) ? inference.ai : null,
+    observationBasis: inference.observationBasis ?? null,
     summary: inference.summary ?? null,
     lessons: inference.lessons ?? [],
     evidence,
