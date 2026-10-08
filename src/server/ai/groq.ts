@@ -222,7 +222,8 @@ export class GroqLLMProvider implements LLMProvider {
     let attempts = 0;
     let outcome: { value: T; usage?: GenerationUsage } | null = null;
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const maxAttempts = request.singleAttempt === true ? 1 : MAX_ATTEMPTS;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
         lastError = new AIError("TIMEOUT");
@@ -269,7 +270,7 @@ export class GroqLLMProvider implements LLMProvider {
       } catch (error) {
         const normalized = normalizeError(error);
         lastError = normalized;
-        if (attempt < MAX_ATTEMPTS && isRetryable(normalized)) {
+        if (attempt < maxAttempts && isRetryable(normalized)) {
           const wait = Math.min(RETRY_DELAY_MS, Math.max(0, deadline - Date.now()));
           if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
           continue;

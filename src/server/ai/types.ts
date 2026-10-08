@@ -16,6 +16,7 @@ export interface GenerationRequest {
   pipeline: string;
   promptVersion: string;
   inputEntityIds?: readonly string[];
+  singleAttempt?: true;
 }
 
 export interface StructuredGenerationRequest<T> extends GenerationRequest {

@@ -401,6 +401,66 @@ async function main(): Promise<void> {
       const ownedPattern = await createPatternsRepository(session, foreignOwner).getDNA();
       assert.ok(!ownedPattern.observations.some((item) => dnaPatternIds.includes(item.id)));
       report.decisionDNA = { status: "verified", view, repeatedRecomputeStable: true, documentEmbeddingCalls: documentCalls, evidenceLinks: patternLinks.rows.length, ownerIsolation: "verified", retrieval: { query: queryText, observationId: targetObservation.id, rank: rank + 1, similarity: hits.rows[rank].similarity, model: embeddedQuery.model, dimensions: embeddedQuery.dimensions, meaning: "retrieval in this verification corpus only" } };
+      if (process.env.VERIFY_PRE_TRADE_RECALL === "1") {
+        verificationStage = "pre_trade_recall";
+        const { createRecallHandler } = await import("../src/server/recall/http");
+        const proposedText = "I have early access to a hyped token and I'm thinking of buying without much research.";
+        const countsQuery = "SELECT (SELECT count(*)::int FROM public.decisions WHERE user_id=$1) AS decisions,(SELECT count(*)::int FROM public.trades WHERE user_id=$1) AS trades,(SELECT count(*)::int FROM public.reviews WHERE user_id=$1) AS reviews,(SELECT count(*)::int FROM public.patterns WHERE user_id=$1) AS patterns,(SELECT count(*)::int FROM public.pattern_evidence WHERE user_id=$1) AS links,(SELECT count(*)::int FROM public.memory_embeddings WHERE user_id=$1) AS embeddings,(SELECT count(*)::int FROM public.evidence_records WHERE user_id=$1) AS evidence";
+        const before = await client.query(countsQuery, [owner.userId]);
+        const recalled = await expectSuccess(await createRecallHandler({ db: session, authProvider: authA, embedder: jina })(request({ text: proposedText })), 200);
+        assert.equal(recalled.proposedTrade.rawText, proposedText);
+        assert.equal(recalled.proposedTrade.durableProposalCreated, false);
+        assert.equal(recalled.historicalMemories.length, 1, "review and DNA memories must deduplicate to one independent decision");
+        const history = recalled.historicalMemories[0];
+        assert.equal(history.decisionId, decisionId);
+        assert.equal(history.reviewId, reviewId);
+        assert.equal(history.symbol, "RUNNER");
+        assert.equal(history.outcome, "unknown");
+        assert.equal(history.lifecycle.evidenceCount, 1);
+        assert.equal(history.knowledgeBasis, "retrospective_recollection");
+        assert.ok(history.origins.some((origin: { label: string; basis: string }) => origin.label === "pure_impulse" && origin.basis === "inference"));
+        assert.ok(history.matchedSources.some((match: { entityType: string; entityId: string; similarity: number }) => match.entityType === "review" && match.entityId === reviewId && Number.isFinite(match.similarity)));
+        assert.ok(recalled.dnaObservations.some((observation: { id: string; feature: string; status: string; evidenceCount: number }) => observation.id === targetObservation.id && observation.feature === "target_drift" && observation.status === "observation" && observation.evidenceCount === 1));
+        assert.equal(recalled.establishedPatterns.length, 0);
+        assert.equal(recalled.emergingPatterns.length, 0);
+        assert.equal(recalled.acceptedPlaybookRules.length, 0);
+        assert.ok(!recalled.dnaObservations.some((observation: { category: string }) => observation.category === "regime"));
+        const driftWatchpoint = recalled.watchpoints.find((item: { id: string }) => item.id.startsWith("target_drift_"));
+        assert.ok(driftWatchpoint);
+        assert.ok(driftWatchpoint.text.includes("1000000") && driftWatchpoint.text.includes("2000000"));
+        assert.ok(driftWatchpoint.text.includes("In one recalled reviewed decision"));
+        assert.equal(recalled.missingInformation.historicalFinancialOutcomeUnknown, true);
+        assert.equal(recalled.missingInformation.verifiedProposedDecisionTimeContext, true);
+        for (const id of ["define_exit", "define_invalidation", "justify_target_revision"]) assert.ok(recalled.questions.some((question: { id: string }) => question.id === id));
+        assert.ok(["model_selected", "deterministic_fallback"].includes(recalled.explanation.mode));
+        assert.equal(recalled.explanation.newHistoricalClaimsGenerated, false);
+        const refs = [...new Set<string>([...recalled.sourceReferences.flatMap((source: { evidenceRefs: string[] }) => source.evidenceRefs), ...recalled.watchpoints.flatMap((item: { evidenceRefs: string[] }) => item.evidenceRefs), ...recalled.questions.flatMap((item: { evidenceRefs: string[] }) => item.evidenceRefs)])];
+        const ownedRefs = await client.query("SELECT id FROM public.evidence_records WHERE user_id=$1 AND id=ANY($2::uuid[])", [owner.userId, refs]);
+        assert.equal(ownedRefs.rows.length, refs.length);
+        let injectedCalls = 0;
+        const timeoutSelector: LLMProvider = {
+          generateText: async () => { throw new AIError("TIMEOUT"); },
+          generateStructured: async () => { injectedCalls += 1; throw new AIError("TIMEOUT"); },
+        };
+        const fallback = await expectSuccess(await createRecallHandler({ db: session, authProvider: authA, embedder: jina, llm: timeoutSelector })(request({ text: proposedText })), 200);
+        assert.equal(injectedCalls, 1);
+        assert.equal(fallback.explanation.mode, "deterministic_fallback");
+        assert.equal(fallback.explanation.failureCategory, "TIMEOUT");
+        assert.equal(fallback.historicalMemories[0].decisionId, decisionId);
+        assert.equal(fallback.historicalMemories[0].outcome, "unknown");
+        assert.deepEqual(fallback.watchpoints.map((item: { id: string }) => item.id).sort(), recalled.watchpoints.map((item: { id: string }) => item.id).sort());
+        assert.deepEqual(fallback.questions.map((item: { id: string }) => item.id).sort(), recalled.questions.map((item: { id: string }) => item.id).sort());
+        const foreignRecall = await expectSuccess(await createRecallHandler({ db: session, authProvider: authB, embedder: jina, llm: timeoutSelector })(request({ text: proposedText })), 200);
+        assert.ok(!foreignRecall.historicalMemories.some((item: { decisionId: string }) => item.decisionId === decisionId));
+        assert.ok(!foreignRecall.dnaObservations.some((item: { id: string }) => dnaPatternIds.includes(item.id)));
+        assert.ok(!foreignRecall.sourceReferences.some((source: { entityId: string }) => [decisionId, reviewId, ...dnaPatternIds].includes(source.entityId)));
+        const after = await client.query(countsQuery, [owner.userId]);
+        assert.deepEqual(after.rows[0], before.rows[0], "Recall must not create durable proposal, decision, trade, pattern or memory rows");
+        const selectionRuns = await client.query("SELECT id,status,validation_errors,token_usage FROM public.ai_runs WHERE user_id=$1 AND pipeline='pre-trade-recall' AND $2::uuid=ANY(input_entity_ids) ORDER BY created_at,id", [owner.userId, decisionId]);
+        assert.ok(selectionRuns.rows.length <= 1, "one real model selection run, no resampling");
+        for (const selectionRun of selectionRuns.rows) assert.equal(selectionRun.token_usage.run.attempts, 1);
+        report.preTradeRecall = { status: "verified", proposal: proposedText, response: recalled, fallback: { status: "verified", mode: fallback.explanation.mode, cause: "controlled timeout injection, not an observed live provider timeout", injectedCalls }, ownerIsolation: "verified", evidenceRefsValidated: refs.length, durableBusinessRowsUnchanged: true, selectionRuns: selectionRuns.rows };
+      }
     }
     await client.query("ROLLBACK");
     inTransaction = false;
@@ -412,6 +472,11 @@ async function main(): Promise<void> {
       const dnaRemaining = await client.query("SELECT (SELECT count(*)::int FROM public.patterns WHERE user_id=$1 AND id=ANY($2::uuid[])) AS patterns,(SELECT count(*)::int FROM public.pattern_evidence WHERE user_id=$1 AND pattern_id=ANY($2::uuid[])) AS links,(SELECT count(*)::int FROM public.memory_embeddings WHERE user_id=$1 AND entity_type='pattern' AND entity_id=ANY($2::uuid[])) AS embeddings,(SELECT count(*)::int FROM public.evidence_records WHERE user_id=$1 AND review_id=$3 AND kind='prior_review') AS reviewEvidence", [owner.userId, dnaPatternIds, reviewId]);
       assert.deepEqual(dnaRemaining.rows[0], { patterns: 0, links: 0, embeddings: 0, reviewevidence: 0 });
       report.decisionDNARollback = { status: "verified", remainingRows: dnaRemaining.rows[0] };
+    }
+    if (process.env.VERIFY_PRE_TRADE_RECALL === "1") {
+      const recallRemaining = await client.query("SELECT count(*)::int AS count FROM public.ai_runs WHERE user_id=$1 AND pipeline='pre-trade-recall' AND $2::uuid=ANY(input_entity_ids)", [owner.userId, decisionId]);
+      assert.equal(recallRemaining.rows[0].count, 0);
+      report.preTradeRecallRollback = { status: "verified", remainingSelectionRuns: 0, durableProposalCreated: false };
     }
     console.log(JSON.stringify({ ...report, rollback: { status: "verified", remainingRows: remaining.rows[0] } }, null, 2));
   } finally {
