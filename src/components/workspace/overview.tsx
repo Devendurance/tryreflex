@@ -17,7 +17,7 @@ const LOOP: { step: string; detail: string; href?: string }[] = [
   { step: "Import what happened", detail: "Bring in your Bitget Classic spot history and declare each order's purpose.", href: "/app/activity" },
   { step: "Review the process", detail: "Add a decision's trade evidence, then Decision Autopsy scores the process separately from P&L.", href: "/app/autopsies" },
   { step: "Find the pattern", detail: "Decision DNA compares reviewed decisions as they accumulate.", href: "/app/dna" },
-  { step: "Carry the lesson", detail: "Playbook rules and Pre-Trade Recall bring it back next time." },
+  { step: "Carry the lesson", detail: "Playbook rules and Pre-Trade Recall bring it back next time.", href: "/app/playbook" },
 ];
 
 function useReflexRecord() {

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Dna, FileSpreadsheet, LayoutDashboard, Microscope, Loader2, LogOut, Menu, NotebookPen, X, type LucideIcon } from "lucide-react";
+import { BookCheck, ChevronDown, Dna, History, FileSpreadsheet, LayoutDashboard, Microscope, Loader2, LogOut, Menu, NotebookPen, X, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -23,8 +23,9 @@ const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/app/activity", label: "Trade Activity", icon: FileSpreadsheet },
   { href: "/app/autopsies", label: "Autopsies", icon: Microscope },
   { href: "/app/dna", label: "Decision DNA", icon: Dna },
+  { href: "/app/playbook", label: "Playbook", icon: BookCheck },
+  { href: "/app/recall", label: "Pre-Trade Recall", icon: History },
 ];
-const UPCOMING = ["Playbook", "Pre-Trade Recall"];
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
@@ -50,17 +51,6 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
           );
         })}
       </ul>
-      <div>
-        <p className="t-eyebrow px-4">Coming to your desk</p>
-        <ul className="mt-3 flex flex-col">
-          {UPCOMING.map((label) => (
-            <li key={label} className="flex h-10 items-center justify-between px-4 text-[14px] text-muted">
-              {label}
-              <span className="t-data text-[11px] leading-4 font-semibold tracking-[0.1em] text-crosshair uppercase">Soon</span>
-            </li>
-          ))}
-        </ul>
-      </div>
     </nav>
   );
 }
