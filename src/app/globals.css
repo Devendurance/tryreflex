@@ -1,26 +1,298 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  --color-cream: #fbf5ec;
+  --color-hero-top: #f6eadc;
+  --color-paper: #f4efe6;
+  --color-stone: #e9e4da;
+  --color-ink: #241b15;
+  --color-muted: #6b625a;
+  --color-eyebrow: #5a5348;
+  --color-hairline: #ddd6c8;
+  --color-crosshair: #8a8277;
+  --color-orange: #f26b1d;
+  --color-orange-hover: #e8600f;
+  --color-orange-active: #cf540b;
+  --color-orange-tint: rgba(242, 107, 29, 0.12);
+  --color-blue: #3f5bd8;
+  --color-blue-tint: rgba(63, 91, 216, 0.12);
+  --color-quiet: #efe5d6;
+  --color-quiet-hover: #e8dac7;
+  --color-gain: #3f7a5b;
+  --color-loss: #b8404e;
+  --color-sage: #dce7dc;
+  --color-lavender: #e0ddf3;
+  --color-butter: #f9f0c8;
+  --color-blush: #f4d5d9;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-serif: var(--font-newsreader), "Source Serif 4", Georgia, serif;
+  --font-sans: var(--font-satoshi), "General Sans", -apple-system, "Segoe UI", sans-serif;
+  --font-data: var(--font-georama), var(--font-satoshi), system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 72px;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-muted);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 26px;
+}
+
+::selection {
+  background: rgba(242, 107, 29, 0.22);
+  color: var(--color-ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 3px;
+}
+
+@layer components {
+  .t-display {
+    font-family: var(--font-serif);
+    font-optical-sizing: auto;
+    font-weight: 500;
+    color: var(--color-ink);
+    font-size: 40px;
+    line-height: 44px;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+  .t-h2 {
+    font-family: var(--font-serif);
+    font-optical-sizing: auto;
+    font-weight: 500;
+    color: var(--color-ink);
+    font-size: 32px;
+    line-height: 38px;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+  .t-brief {
+    font-family: var(--font-serif);
+    font-optical-sizing: auto;
+    font-weight: 500;
+    color: var(--color-ink);
+    font-size: 24px;
+    line-height: 30px;
+    letter-spacing: -0.01em;
+  }
+  .t-lead {
+    font-size: 16px;
+    line-height: 26px;
+    color: var(--color-muted);
+    text-wrap: pretty;
+  }
+  .t-eyebrow {
+    font-family: var(--font-data);
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-eyebrow);
+  }
+  .t-caption {
+    font-family: var(--font-data);
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--color-muted);
+  }
+  .t-data {
+    font-family: var(--font-data);
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (min-width: 640px) {
+    .t-display {
+      font-size: 56px;
+      line-height: 60px;
+    }
+    .t-h2 {
+      font-size: 40px;
+      line-height: 46px;
+    }
+    .t-lead {
+      font-size: 17px;
+      line-height: 28px;
+    }
+  }
+  @media (min-width: 1024px) {
+    .t-display {
+      font-size: 60px;
+      line-height: 64px;
+    }
+    .t-h2 {
+      font-size: 48px;
+      line-height: 54px;
+    }
+    .t-lead {
+      font-size: 18px;
+      line-height: 30px;
+    }
+  }
+  @media (min-width: 1280px) {
+    .t-display {
+      font-size: 72px;
+      line-height: 76px;
+    }
+  }
+}
+
+/* Reflex Engine hero illustration */
+.eng-label {
+  font-family: var(--font-data);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  fill: var(--color-eyebrow);
+}
+
+.eng-anim {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.eng-in {
+  animation: eng-in 7.5s linear infinite;
+}
+.eng-out {
+  animation: eng-out 5s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.eng-core {
+  animation: eng-core 2.5s ease-in-out infinite;
+}
+.eng-ripple {
+  animation: eng-ripple 2.5s ease-out infinite;
+}
+.eng-ring {
+  animation: eng-ring 12s linear infinite;
+}
+.eng-scan {
+  animation: eng-scan 5s ease-in-out infinite;
+}
+.eng-wobble {
+  animation: eng-wobble 1.9s ease-in-out infinite alternate;
+}
+.eng-settle {
+  animation: eng-settle 5s ease-out infinite;
+}
+
+@keyframes eng-in {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(520px, 300px);
+    opacity: 0;
+  }
+}
+@keyframes eng-out {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  78% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(130px, 75px);
+    opacity: 0;
+  }
+}
+@keyframes eng-core {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+@keyframes eng-ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@keyframes eng-ring {
+  to {
+    stroke-dashoffset: -200;
+  }
+}
+@keyframes eng-scan {
+  0%,
+  100% {
+    transform: translateX(-70px);
+  }
+  50% {
+    transform: translateX(70px);
+  }
+}
+@keyframes eng-wobble {
+  from {
+    transform: rotate(-7deg) translateY(1px);
+  }
+  to {
+    transform: rotate(6deg) translateY(-1px);
+  }
+}
+@keyframes eng-settle {
+  0%,
+  70% {
+    transform: translateY(0);
+  }
+  82% {
+    transform: translateY(-3px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+[data-motion="paused"] .eng-anim,
+[data-motion="paused"] .eng-anim * {
+  animation-play-state: paused;
+}
+
+@media (max-width: 639px) {
+  .eng-label,
+  .eng-leader {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .eng-anim,
+  .eng-anim * {
+    animation: none !important;
+  }
+  .eng-flow {
+    display: none;
+  }
 }

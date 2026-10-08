@@ -8,7 +8,8 @@ Last updated: 2026-10-08
 - Built for the Bitget AI Base Camp Hackathon S2, AI Trading Desk track, Review & Self-Evolution sub-theme.
 - Core loop: Decide → Trade → Understand → Learn → Evolve → Recall → Decide better.
 - Core thesis: separate decision quality from financial outcome, since P&L is a poor teacher.
-- First backend slice shipped: public market-context API. Frontend still template.
+- First backend slice shipped: public market-context API. Frontend phase started: production landing page at `/` plus an honest `/access` transition page. No workspace UI yet.
+- Landing architecture: `src/components/landing/` (primitives, site-nav client menu, hero, engine-figure client wrapper with pause toggle, reflex-engine isometric SVG with an exported `EngineUnit`/`EngineGhost`, problem-section, how-it-works, capabilities, differentiation, closing + footer). Tokens in `globals.css`, Satoshi self-hosted in `src/app/fonts/`.
 
 ## Stack
 

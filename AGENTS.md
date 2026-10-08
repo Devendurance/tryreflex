@@ -113,3 +113,9 @@
 
 - Always follow or reference the UI design system when creating or reviewing components or pages.
 - Design System: @DESIGN.md
+- Landing components live in `src/components/landing/`. Shared tokens are Tailwind 4 `@theme` colors plus `.t-display/.t-h2/.t-lead/.t-eyebrow/.t-caption/.t-data` in `globals.css`. Fonts: Newsreader + Georama via `next/font/google`, Satoshi self-hosted from `src/app/fonts/` via `next/font/local`.
+- The hero Reflex Engine is hand-built isometric SVG (`reflex-engine.tsx`, projection helper `p(x,y,z)`). Animate only via CSS classes with compositor-friendly transforms/opacity; never put a CSS-animated class on an element that also has an SVG `transform` attribute. Keep `.eng-flow` hidden and all `.eng-anim` stopped under reduced motion, and keep the visible pause control.
+- Conceptual illustrations and example cards must be labeled as not user data. No fake stats, testimonials, user counts or performance claims on marketing pages.
+- Primary CTAs route to `/access`, an honest transition page, until the real Neon Auth sign-in UI and workspace exist. Never fake a session or a signed-in state.
+- Visual QA uses the `mcp-playwright` server. It can only write inside the repo, so save screenshots under `.playwright-mcp/` (gitignored) and move them to `C:/Users/USER/bitget-mcp-discovery/landing-screens/` afterwards.
+- Running `next build` replaces `.next` under the repo-owned `next start -p 3002` server, so restart that server after a build.
