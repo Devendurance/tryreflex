@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AIError } from "./ai/errors";
 import type { TargetDriftFinding } from "./reviews/plan-drift";
+import type { PlaybookRuleProvenance } from "./playbook-policy";
 
 export const RECALL_POLICY_VERSION = "pre-trade-recall.v1";
 export const RECALL_MIN_SIMILARITY = 0.2;
@@ -59,6 +60,9 @@ export interface RecallRule {
   status: "active";
   userDecision: "accepted";
   evidenceRefs: string[];
+  rationale: string;
+  maturity: "experimental" | "pattern_backed" | null;
+  provenance: PlaybookRuleProvenance | null;
   match: RecallMatch;
 }
 export interface RecallData {

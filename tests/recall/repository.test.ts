@@ -6,6 +6,7 @@ import type { DbSession, Queryable } from "../../src/server/db/client";
 import { computeSourceHash } from "../../src/server/db/validation";
 import { RepositoryError } from "../../src/server/db/repositories";
 import { RECALL_QUERIES } from "../../src/server/recall-queries";
+import { buildRationale, ruleEquivalentKey } from "../../src/server/playbook-policy";
 import type { RecallInput } from "../../src/server/recall-policy";
 import { createRecallRepository } from "../../src/server/recall/repository";
 
@@ -493,4 +494,76 @@ test("more than ten supporting decisions truncates and keeps original counts", (
     assert.equal(data.patterns[0].supportingDecisionIds.length, 12);
     assert.equal(data.patterns[0].evidenceCount, 12);
     assert.ok(data.history.length <= 10);
+  }));
+
+test("accepted playbook rule exposes validated provenance; malformed provenance fails closed", () =>
+  withEmbeddingEnv(async () => {
+    const validProvenance = {
+      producer: "playbook.v1",
+      templateId: "target_revision",
+      equivalentKey: ruleEquivalentKey("target_revision", "f".repeat(64)),
+      patternFingerprint: "f".repeat(64),
+      sourcePatternId: P1,
+      maturity: "experimental",
+      sourceStatus: "observation",
+      supportingDecisionCount: 1,
+      highQualityCount: 0,
+      establishedEligible: false,
+      supportingDecisionIds: [D1],
+      supportingReviewIds: [R1],
+      evidenceRefs: [E1],
+      observedBehavior: "Target drift observed once.",
+      supportingFacts: [{ decisionId: D1, reviewId: R1, basis: "retrospective_user_report", observedFacts: [{ evidenceId: E1, quote: "moved to $2M" }] }],
+      relevantMetrics: { decisionCount: 1, finalCount: 1, provisionalCount: 0, qualityUnassessedCount: 0 },
+      evidenceStrength: "limited",
+      scope: "single-decision observation, not recurrence",
+      effectiveness: "unproven",
+      financialBenefit: "unknown",
+      confidence: null,
+    };
+    const rule = {
+      id: RL1,
+      user_id: USER_ID,
+      title: "Document evidence for exit-target revisions",
+      trigger: "Before entering a trade and before revising its exit target",
+      rule_text:
+        "Before entering a trade, record my intended exit target and the evidence that would justify revising it. When my original target is reached, review that evidence before changing the plan.",
+      rationale: buildRationale(validProvenance.observedBehavior, validProvenance.scope),
+      source_pattern_id: P1,
+      status: "active",
+      user_decision: "accepted",
+    };
+    const { db } = fakeDb({
+      search: [searchRow("rule", RL1, MEM_L)],
+      rules: [rule],
+      ruleEvidence: [
+        { id: E1, user_id: USER_ID, kind: "user_input" },
+        { id: "99999999-9999-4999-8999-000000000001", user_id: USER_ID, kind: "playbook_rule", rule_id: RL1, label: JSON.stringify(validProvenance) },
+      ],
+    });
+    const data = await recall(INPUT, db);
+    assert.equal(data.rules.length, 1);
+    assert.equal(data.rules[0].maturity, "experimental");
+    assert.equal(data.rules[0].provenance?.effectiveness, "unproven");
+    assert.equal(data.rules[0].rationale, buildRationale(validProvenance.observedBehavior, validProvenance.scope));
+    assert.deepEqual(data.rules[0].evidenceRefs, [E1]);
+
+    const malformed = fakeDb({
+      search: [searchRow("rule", RL1, MEM_L)],
+      rules: [rule],
+      ruleEvidence: [
+        { id: E1, user_id: USER_ID, kind: "user_input" },
+        { id: "99999999-9999-4999-8999-000000000001", user_id: USER_ID, kind: "playbook_rule", rule_id: RL1, label: JSON.stringify({ ...validProvenance, maturity: "proven" }) },
+      ],
+    });
+    await assert.rejects(() => recall(INPUT, malformed.db), RepositoryError);
+
+    const legacy = fakeDb({
+      search: [searchRow("rule", RL1, MEM_L)],
+      rules: [{ ...rule, title: "Legacy", trigger: "t", rule_text: "r", rationale: null }],
+      ruleEvidence: [{ id: E1, user_id: USER_ID, kind: "user_input" }],
+    });
+    const legacyData = await recall(INPUT, legacy.db);
+    assert.equal(legacyData.rules[0].provenance, null);
+    assert.equal(legacyData.rules[0].maturity, null);
   }));

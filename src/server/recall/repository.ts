@@ -8,6 +8,7 @@ import { AIError } from "../ai/errors";
 import type { EmbeddingProvider } from "../ai/types";
 import { RECALL_QUERIES } from "../recall-queries";
 import { patternLifecycle } from "../decision-dna-policy";
+import { validateFrozenRule } from "../playbook-policy";
 import {
   RECALL_DECISION_LIMIT,
   RECALL_MIN_SIMILARITY,
@@ -380,9 +381,8 @@ export function createRecallRepository(db: DbSession, authContext: AuthContext) 
         const evidenceRows = (
           await db.query<Row>(RECALL_QUERIES.ruleEvidence, [userId, match.entityId]).catch(dbError)
         ).rows;
-        for (const row of evidenceRows) requireOwned(row, userId);
-        if (evidenceRows.length === 0) continue;
-        const refs = evidenceRows.map((row) => String(row.id));
+        const { provenance, refs } = validateFrozenRule(ruleRow, evidenceRows, userId);
+        if (refs.length === 0) continue;
         rules.push({
           id: String(ruleRow.id),
           title: String(ruleRow.title),
@@ -391,6 +391,9 @@ export function createRecallRepository(db: DbSession, authContext: AuthContext) 
           status: "active",
           userDecision: "accepted",
           evidenceRefs: refs,
+          rationale: String(ruleRow.rationale),
+          maturity: provenance?.maturity ?? null,
+          provenance,
           match,
         });
         addSource("rule", String(ruleRow.id), refs, "accepted_playbook_rule");

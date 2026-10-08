@@ -80,6 +80,11 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  if (process.env.VERIFY_PLAYBOOK === "1") {
+    assert.equal(process.env.VERIFY_DECISION_DNA, "1", "Playbook proof requires the historical DNA replay path");
+    assert.ok(process.env.VERIFY_ACCEPTED_REVIEW_FILE, "Playbook proof requires a frozen accepted review file before any provider call");
+    await readFile(process.env.VERIFY_ACCEPTED_REVIEW_FILE, "utf8");
+  }
   const jar = jarSchema.parse(JSON.parse(await readFile(jarPath, "utf8")));
   const genuine = genuineInputSchema.parse(JSON.parse(await readFile(tradePath, "utf8")));
   const memoryQuery = process.argv[4] === undefined
@@ -338,6 +343,7 @@ async function main(): Promise<void> {
       report.memory = { status: "verified", model: stored.model, dimensions: stored.dimensions, textVersion: canonical.version, sourceText: canonical.text, query: memoryQuery, retrievalRank: rank + 1, similarity: hits[rank].similarity, ownerIsolation: "verified" };
     }
     const dnaPatternIds: string[] = [];
+    const playbookRuleIds: string[] = [];
     if (process.env.VERIFY_DECISION_DNA === "1") {
       verificationStage = "decision_dna";
       const { createPatternsRepository } = await import("../src/server/patterns/repository");
@@ -461,6 +467,14 @@ async function main(): Promise<void> {
         for (const selectionRun of selectionRuns.rows) assert.equal(selectionRun.token_usage.run.attempts, 1);
         report.preTradeRecall = { status: "verified", proposal: proposedText, response: recalled, fallback: { status: "verified", mode: fallback.explanation.mode, cause: "controlled timeout injection, not an observed live provider timeout", injectedCalls }, ownerIsolation: "verified", evidenceRefsValidated: refs.length, durableBusinessRowsUnchanged: true, selectionRuns: selectionRuns.rows };
       }
+      if (process.env.VERIFY_PLAYBOOK === "1") {
+        assert.ok(historical, "Playbook proof requires the frozen accepted historical review, never a new autopsy");
+        verificationStage = "playbook";
+        const { verifyPlaybookReplay } = await import("./verify-playbook-replay");
+        const proof = await verifyPlaybookReplay({ session, authA, authB, jina, decisionId, tradeId, reviewId, targetObservationId: targetObservation.id });
+        playbookRuleIds.push(...proof.ruleIds);
+        report.playbook = proof.report;
+      }
     }
     await client.query("ROLLBACK");
     inTransaction = false;
@@ -477,6 +491,13 @@ async function main(): Promise<void> {
       const recallRemaining = await client.query("SELECT count(*)::int AS count FROM public.ai_runs WHERE user_id=$1 AND pipeline='pre-trade-recall' AND $2::uuid=ANY(input_entity_ids)", [owner.userId, decisionId]);
       assert.equal(recallRemaining.rows[0].count, 0);
       report.preTradeRecallRollback = { status: "verified", remainingSelectionRuns: 0, durableProposalCreated: false };
+    }
+    if (process.env.VERIFY_PLAYBOOK === "1") {
+      assert.ok(playbookRuleIds.length > 0, "Playbook proof must run before rollback verification");
+      const { PLAYBOOK_ROLLBACK_QUERY } = await import("./verify-playbook-replay");
+      const playbookRemaining = await client.query(PLAYBOOK_ROLLBACK_QUERY, [owner.userId, playbookRuleIds]);
+      assert.deepEqual(playbookRemaining.rows[0], { rules: 0, links: 0, provenance: 0, embeddings: 0 });
+      report.playbookRollback = { status: "verified", remainingRows: playbookRemaining.rows[0] };
     }
     console.log(JSON.stringify({ ...report, rollback: { status: "verified", remainingRows: remaining.rows[0] } }, null, 2));
   } finally {
