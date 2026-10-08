@@ -118,4 +118,6 @@
 - Conceptual illustrations and example cards must be labeled as not user data. No fake stats, testimonials, user counts or performance claims on marketing pages.
 - Primary CTAs route to `/access`, an honest transition page, until the real Neon Auth sign-in UI and workspace exist. Never fake a session or a signed-in state.
 - Visual QA uses the `mcp-playwright` server. It can only write inside the repo, so save screenshots under `.playwright-mcp/` (gitignored) and move them to `C:/Users/USER/bitget-mcp-discovery/landing-screens/` afterwards.
+- The mobile menu is a full-screen overlay portaled to `<body>`, because the header's `backdrop-filter` becomes the containing block for any fixed child. Keep it out of normal flow, keep the scroll lock, inert siblings, focus trap and focus return, and clean them all up on close and unmount.
+- `.playwright-mcp/` is gitignored, so agent file tools can't read screenshots there. Move them to the external folder before viewing.
 - Running `next build` replaces `.next` under the repo-owned `next start -p 3002` server, so restart that server after a build.

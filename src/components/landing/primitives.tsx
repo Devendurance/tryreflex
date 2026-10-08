@@ -21,9 +21,9 @@ export function ReflexMark({ className = "h-5 w-auto" }: { className?: string })
   );
 }
 
-export function ReflexLogo() {
+export function ReflexLogo({ onClick }: { onClick?: () => void }) {
   return (
-    <Link href="/" className="inline-flex items-center gap-2.5 rounded-sm text-ink" aria-label="Reflex home">
+    <Link href="/" onClick={onClick} className="inline-flex items-center gap-2.5 rounded-sm text-ink" aria-label="Reflex home">
       <ReflexMark className="h-[18px] w-auto" />
       <span className="font-serif text-[26px] leading-none font-medium tracking-[-0.01em]">Reflex</span>
     </Link>
