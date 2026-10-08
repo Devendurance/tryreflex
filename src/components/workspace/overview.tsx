@@ -15,8 +15,8 @@ type RecordState =
 const LOOP: { step: string; detail: string; href?: string }[] = [
   { step: "Capture the thinking", detail: "Write what you believe before the result exists, then confirm it.", href: "/app/decisions" },
   { step: "Import what happened", detail: "Bring in your Bitget Classic spot history and declare each order's purpose.", href: "/app/activity" },
-  { step: "Review the process", detail: "Decision Autopsy scores the process separately from P&L." },
-  { step: "Find the pattern", detail: "Decision DNA compares reviewed decisions as they accumulate." },
+  { step: "Review the process", detail: "Add a decision's trade evidence, then Decision Autopsy scores the process separately from P&L.", href: "/app/autopsies" },
+  { step: "Find the pattern", detail: "Decision DNA compares reviewed decisions as they accumulate.", href: "/app/dna" },
   { step: "Carry the lesson", detail: "Playbook rules and Pre-Trade Recall bring it back next time." },
 ];
 

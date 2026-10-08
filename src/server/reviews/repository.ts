@@ -8,6 +8,7 @@ import { REVIEW_DIMENSIONS } from "../review-policy";
 type Row = Record<string, unknown>;
 
 const uuidSchema = z.string().uuid();
+const listLimitSchema = z.number().int().min(1).max(50);
 
 const planDriftRefsSchema = z.array(
   z.looseObject({ evidenceRefs: z.array(z.string().uuid()).min(1).max(10) }),
@@ -277,5 +278,76 @@ export function createReviewRepository(db: DbSession, authContext: AuthContext) 
     };
   }
 
-  return { loadBundle, ensureEvidence, persistReview, getReviewView };
+  async function listReviews(limit: number, cursor: string | null): Promise<{ reviews: Row[]; nextCursor: string | null }> {
+    const parsedLimit = listLimitSchema.parse(limit);
+    const parsedCursor = uuidSchema.nullable().parse(cursor);
+    const rows = (
+      await db
+        .query<Row>(
+          `SELECT r.id,r.version,r.is_current,r.trade_id,r.decision_id,r.created_at,r.process_classification,r.observed_metrics->'decisionQuality' AS decision_quality,t.symbol,t.side FROM public.reviews r JOIN public.trades t ON t.user_id=r.user_id AND t.id=r.trade_id WHERE r.user_id=$1 AND ($2::uuid IS NULL OR (r.created_at,r.id)<(SELECT c.created_at,c.id FROM public.reviews c WHERE c.user_id=$1 AND c.id=$2)) ORDER BY r.created_at DESC,r.id DESC LIMIT $3`,
+          [userId, parsedCursor, parsedLimit + 1],
+        )
+        .catch(mapPersistenceError)
+    ).rows;
+    const page = rows.slice(0, parsedLimit);
+    return {
+      reviews: page.map((row) => {
+        const quality = jsonObjectSchema.safeParse(row.decision_quality).success ? (row.decision_quality as Row) : null;
+        return {
+          id: row.id,
+          version: row.version,
+          isCurrent: row.is_current,
+          tradeId: row.trade_id,
+          decisionId: row.decision_id,
+          createdAt: row.created_at,
+          classification: row.process_classification ?? null,
+          symbol: row.symbol,
+          side: row.side,
+          decisionQuality: quality
+            ? { status: quality.status ?? null, score: quality.score ?? null, evidenceCoveragePct: quality.evidenceCoveragePct ?? null }
+            : null,
+        };
+      }),
+      nextCursor: rows.length > parsedLimit ? String(page[page.length - 1].id) : null,
+    };
+  }
+
+  async function listDecisionTrades(decisionId: string): Promise<{ trades: Row[] }> {
+    const parsedId = uuidSchema.safeParse(decisionId);
+    if (!parsedId.success) throw new RepositoryError("request failed validation", "INVALID_INPUT");
+    const decision = await db
+      .query<Row>(`SELECT id FROM public.decisions WHERE user_id=$1 AND id=$2 LIMIT 1`, [userId, parsedId.data])
+      .catch(mapPersistenceError);
+    if (!decision.rows[0]) throw new RepositoryError("decision not found", "NOT_FOUND");
+    const rows = (
+      await db
+        .query<Row>(
+          `SELECT t.id,t.provider,t.symbol,t.side,t.quantity,t.entry_price,t.exit_price,t.opened_at,t.closed_at,t.created_at,r.id AS review_id,r.version AS review_version,r.created_at AS review_created_at FROM public.trades t LEFT JOIN public.reviews r ON r.user_id=t.user_id AND r.trade_id=t.id AND r.is_current WHERE t.user_id=$1 AND t.decision_id=$2 ORDER BY t.created_at DESC,t.id DESC,r.version DESC LIMIT 100`,
+          [userId, parsedId.data],
+        )
+        .catch(mapPersistenceError)
+    ).rows;
+    const seen = new Set<string>();
+    const trades: Row[] = [];
+    for (const row of rows) {
+      if (seen.has(String(row.id))) continue;
+      seen.add(String(row.id));
+      trades.push({
+        id: row.id,
+        provider: row.provider,
+        symbol: row.symbol,
+        side: row.side,
+        quantity: row.quantity ?? null,
+        entryPrice: row.entry_price ?? null,
+        exitPrice: row.exit_price ?? null,
+        openedAt: row.opened_at ?? null,
+        closedAt: row.closed_at ?? null,
+        createdAt: row.created_at,
+        currentReview: row.review_id ? { id: row.review_id, version: row.review_version, createdAt: row.review_created_at } : null,
+      });
+    }
+    return { trades };
+  }
+
+  return { loadBundle, ensureEvidence, persistReview, getReviewView, listReviews, listDecisionTrades };
 }

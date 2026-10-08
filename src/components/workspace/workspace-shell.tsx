@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, FileSpreadsheet, LayoutDashboard, Loader2, LogOut, Menu, NotebookPen, X, type LucideIcon } from "lucide-react";
+import { ChevronDown, Dna, FileSpreadsheet, LayoutDashboard, Microscope, Loader2, LogOut, Menu, NotebookPen, X, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -21,8 +21,10 @@ const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/app", label: "Overview", icon: LayoutDashboard },
   { href: "/app/decisions", label: "Decision Desk", icon: NotebookPen },
   { href: "/app/activity", label: "Trade Activity", icon: FileSpreadsheet },
+  { href: "/app/autopsies", label: "Autopsies", icon: Microscope },
+  { href: "/app/dna", label: "Decision DNA", icon: Dna },
 ];
-const UPCOMING = ["Reviews & DNA", "Playbook", "Pre-Trade Recall"];
+const UPCOMING = ["Playbook", "Pre-Trade Recall"];
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();

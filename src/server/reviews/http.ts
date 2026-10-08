@@ -9,6 +9,7 @@ import {
   providerCallLimiter,
   requireAuthenticated,
   requireJsonBody,
+  RequestValidationError,
 } from "../http/authenticated";
 import { createReviewRepository } from "./repository";
 import { generateReview, getReview } from "./service";
@@ -35,6 +36,34 @@ export function createGenerateReviewHandler(deps: ReviewRouteDeps = {}) {
         planDrift: result.planDrift,
         runId: result.runId,
       });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
+}
+
+export function createListReviewsHandler(deps: ReviewRouteDeps = {}) {
+  return async function GET(request: Request): Promise<Response> {
+    try {
+      const { auth, db } = await requireAuthenticated(deps);
+      const url = new URL(request.url);
+      for (const key of url.searchParams.keys()) {
+        if (key !== "limit" && key !== "cursor") throw new RequestValidationError();
+      }
+      const limit = url.searchParams.get("limit");
+      if (limit !== null && !/^\d{1,3}$/.test(limit)) throw new RequestValidationError();
+      return jsonResponse(200, await createReviewRepository(db, auth).listReviews(limit === null ? 20 : Number(limit), url.searchParams.get("cursor")));
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
+}
+
+export function createDecisionTradesHandler(deps: ReviewRouteDeps = {}) {
+  return async function GET(_request: Request, params: { id: string }): Promise<Response> {
+    try {
+      const { auth, db } = await requireAuthenticated(deps);
+      return jsonResponse(200, await createReviewRepository(db, auth).listDecisionTrades(params.id));
     } catch (error) {
       return errorResponse(error);
     }

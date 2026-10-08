@@ -17,26 +17,30 @@
 - [x] 3A Real Neon Auth UI (sign in/up, reset, sign out) + protected /app workspace shell + overview. (d101b38)
 - [x] 3B Decision Desk: parse -> inspect -> correct -> confirm -> view saved decision. (623e6c7)
 - [x] 3C Trade Activity + Classic CSV import UI (preview, purpose, commit, history, reclassify).
-- [ ] 3D Autopsy + DNA screens (dimensions, evidence, coverage, drift, honest sparse states).
+- [x] 3D Trade evidence + Autopsy + DNA screens (dimensions, evidence, coverage, drift, honest sparse states).
 - [ ] 3E Playbook + Pre-Trade Recall screens.
 - [ ] 3F Persistent end-to-end QA, cross-user isolation, deploy prep.
 
 ## Current slice
-- 3C DONE, frontend only (no backend change). Routes /app/activity (ImportFlow + Imported activity list + Import history, cursor "Show more"), /app/activity/[id] (order facts, fills, reported totals, purpose + reclassify + audit, provenance), /app/activity/imports/[id] (receipt + its orders). Sidebar NAV + Overview step 2 link to it.
-- Files: src/components/activity/{activity-api.ts,activity-parts,activity-import,activity-desk,activity-detail}.tsx. upload() posts FormData without setting Content-Type; reuses ApiError/api from decision-api.
-- Semantics: preview writes nothing; changing file or account label clears the preview; purposes default unknown, changing one unticks the attestation; commit sends the original File + same scope + previewHash + confirmed=true + purposes for every orderId; commit blocked when !importEligible or any duplicate conflict; already-imported orders keep their saved purpose; fills come from the canonical snapshot so order price and fill price stay distinct; net-of-fees labeled "Not profit"; cost basis/P&L always Unknown; reclassify posts the current version, 409 reloads the activity.
+- 3D DONE. New read seams (reviews repo, owner-scoped): GET /api/reviews?limit=1..50&cursor (summaries: symbol, quality status/score/coverage, no observed_metrics) and GET /api/decisions/[id]/trades (decision's trades + current review; foreign decision 404). Test tests/autopsy/review-list.test.ts (added to test:autopsy).
+- UI: TradeEvidence panel on confirmed decisions (src/components/autopsy/trade-evidence.tsx): manual evidence form -> POST /api/trades/manual (side fixed from snapshot, watch-only blocked, symbol mismatch needs reason, exact-decimal strings, unit prices only, currency required for amounts/caps, capture basis required, retrospective comments separate, attestation, no double submit); per trade "Request autopsy" -> POST /api/reviews/generate, manual retry capped at 3 per page, UNSUPPORTED_INFERENCE shown as not validated/not saved; existing review -> "Open autopsy". Manual trades have no dedupe key, so each save is a new trade.
+- Routes /app/autopsies (paginated list), /app/autopsies/[id] (quality score/status/coverage, quadrant only if present, 5 dimensions with Not assessed for null, observed quotes vs Inference findings, plan drift as one observation, lessons, trade evidence with Unknowns, outcome only when known, market-cap move labeled not a return, snapshot + raw rationale), /app/dna (GET /api/dna, user-triggered recompute, observation/emerging/established groups, strength labels, review links). Sidebar + Overview steps 3-4 link them. ConfirmedSnapshot exported from decision-detail.
 
 ## Completed
+- 3C: Trade Activity /app/activity (+[id], imports/[id]); preview write-free, per-order purpose default unknown, commit with original File + previewHash, reclassify with version check. User ran genuine INJ CSV live. (01a0e40)
 - 3A: Neon Auth pages, src/proxy.ts protecting /app (fails closed), workspace shell, Overview. SDK throws AuthApiError {status, code}; authErrorMessage maps thrown and returned errors.
 - 3B: Decision Desk /app/decisions + /app/decisions/[id], GET /api/decisions owner-scoped list. Inferred origins never pre-ticked, explicit attestation, failed parse leaves a draft in Recent decisions. Correcting a confirmed decision not in UI yet.
 
 ## Blockers
-- Fresh autopsy grounding reliability (affects 3D/3F).
+- Fresh autopsy grounding reliability (affects 3D/3F). 3D UI shows UNSUPPORTED_INFERENCE honestly but the live path is unproven.
+- No genuine decision+trade pair in the user's account yet, so autopsy, DNA, Playbook and Recall can't be shown with real data.
 - Agent browser has no Neon session: signed-in screens need the user to check or share captures. Never create Neon Auth accounts without approval.
 
 ## Verification
-- 3C: type-check, lint (0 errors), production build pass. Anonymous /app/activity, /app/activity/[id], /app/activity/imports/[id] 307 -> /sign-in; GET activities/imports list+[id] and POST preview/commit/purpose all 401. User approved and ran the genuine INJ CSV live: 2 new orders/2 fills, same-file reimport 0 new with "already imported", 7.404 order vs 7.407 fill separate, both payment_conversion, reclassify v1->v2->v3 audit, layouts OK. Server log clean (only pg sslmode warning). Cross-owner relies on existing classic-csv tests (51/51 historically); no second live account.
-- 3B: test:decisions 14/14; user ran a genuine permanent decision end to end.
+- 3D agent: review-list 4/4; test:autopsy 142/142 (first run hit the known AgentKey timing flake at sparse.test.ts:1463, two reruns clean); type-check, lint 0 errors, production build pass. Anonymous /app/autopsies, /app/autopsies/[id], /app/dna 307 -> /sign-in; GET /api/reviews, /api/reviews/[id], /api/decisions/[id]/trades, /api/dna and POST trades/manual, reviews/generate, patterns/recompute all 401.
+- 3D user-verified (user's browser, not agent browser): Autopsies and DNA empty states correct (no Update button on empty DNA); confirmed decision shows "No trade evidence yet"; empty submit blocked; differing symbol reveals required reason; Cancel saves nothing; 1440/820/390/320 no overflow/clipping/copy issues. No trade saved, no autopsy generated.
+- NOT live-verified: manual trade save, real Groq autopsy, review detail rendering, DNA recompute. User has no real trade matching the confirmed decision; nothing fabricated.
+- 3C: user ran genuine INJ CSV live. 3B: test:decisions 14/14, user ran a genuine decision end to end.
 
 ## Next action
-- 3D Autopsy + DNA screens. Read src/server/reviews http (POST /api/reviews/generate, GET /api/reviews/[id]) and GET /api/dna + POST /api/patterns/recompute shapes first. Needs a confirmed decision with an attached trade: check whether trade attachment (POST /api/trades/manual) must be wired as part of 3D. Show dimensions, quotes, coverage, provisional/unassessed states, drift; surface UNSUPPORTED_MOTIVE_CLAIM grounding failures honestly.
+- 3E Playbook + Pre-Trade Recall screens. Read src/server/playbook http shapes (GET /api/playbook, POST /api/playbook/propose {}, POST /api/playbook/[id]/decision {action}) and POST /api/recall first. Both depend on accepted reviews/DNA, which this user doesn't have yet: design honest empty states and decide with the user whether a genuine decision+trade will be recorded for live proof.

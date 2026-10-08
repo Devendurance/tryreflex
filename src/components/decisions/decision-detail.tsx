@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { FormNotice } from "@/components/auth/form-parts";
 import { api, apiErrorMessage, ASSET_CLASSES, formatDate, KNOWLEDGE_BASIS, ORIGINS, SIDES, SOURCE_TYPES, type DecisionRecord, type Snapshot } from "./decision-api";
+import { TradeEvidence } from "@/components/autopsy/trade-evidence";
 import { DecisionEditor } from "./decision-editor";
 import { InferencePanel, Panel, RawInput, StatusBadge, Tag } from "./decision-parts";
 
@@ -21,7 +22,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 
 const notRecorded = <span className="text-muted">Not recorded</span>;
 
-function ConfirmedSnapshot({ snapshot }: { snapshot: Snapshot }) {
+export function ConfirmedSnapshot({ snapshot }: { snapshot: Snapshot }) {
   const value = (v: string | undefined) => (v ? v : notRecorded);
   return (
     <Panel id="snapshot-title" title="Your confirmed decision" aside={<Tag tone="confirmed">Confirmed by you</Tag>}>
@@ -181,6 +182,7 @@ export function DecisionDetail({ id }: { id: string }) {
       {confirmed ? (
         <>
           <ConfirmedSnapshot snapshot={decision.confirmedSnapshot!} />
+          <TradeEvidence decisionId={decision.id} snapshot={decision.confirmedSnapshot!} />
           <RawInput text={decision.rawInput} />
           <InferencePanel record={record} />
           <History record={record} />
