@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-export const ACCESS_HREF = "/access";
+export const ACCESS_HREF = "/app";
 
 export const NAV_LINKS = [
   { href: "/#how-it-works", label: "How it works" },
@@ -38,6 +38,11 @@ const VARIANTS: Record<Variant, string> = {
   quiet: "bg-quiet hover:bg-quiet-hover",
 };
 
+export function buttonClass(variant: Variant = "primary", size: "md" | "sm" = "md") {
+  const sizing = size === "sm" ? "h-10 px-5 text-[14px]" : "h-12 px-7 text-[15px]";
+  return `inline-flex shrink-0 items-center justify-center gap-2 rounded-full font-sans leading-5 font-bold text-ink transition-[background-color,transform,opacity] duration-150 active:scale-[.98] disabled:pointer-events-none disabled:opacity-45 ${sizing} ${VARIANTS[variant]}`;
+}
+
 export function ButtonLink({
   href,
   variant = "primary",
@@ -53,13 +58,8 @@ export function ButtonLink({
   className?: string;
   onClick?: () => void;
 }) {
-  const sizing = size === "sm" ? "h-10 px-5 text-[14px]" : "h-12 px-7 text-[15px]";
   return (
-    <Link
-      href={href}
-      onClick={onClick}
-      className={`inline-flex shrink-0 items-center justify-center gap-2 rounded-full font-sans leading-5 font-bold text-ink transition-[background-color,transform] duration-150 active:scale-[.98] ${sizing} ${VARIANTS[variant]} ${className}`}
-    >
+    <Link href={href} onClick={onClick} className={`${buttonClass(variant, size)} ${className}`}>
       {children}
     </Link>
   );

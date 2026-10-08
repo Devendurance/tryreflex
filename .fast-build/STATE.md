@@ -1,72 +1,41 @@
 # Fast Build State
 
 ## Product
-- Reflex: evidence-backed trading decision intelligence, process separate from outcome.
-- Demo: real user -> immutable decision -> genuine trade -> autopsy -> DNA/playbook -> recall.
-- No frontend, execution writes, fake runtime data or extra chains.
+- Name: Reflex, evidence-backed decision intelligence for crypto and tokenized US equities.
+- Outcome: a usable frontend wired to the real backend. Process quality stays separate from P&L.
+- Primary demo path: Landing -> Auth -> Decision Capture -> Confirm -> Attach trade -> Autopsy -> DNA -> Playbook -> Recall. CSV import verified separately.
 
-## Stack
-- Neon Postgres/pgvector, Drizzle, 23 tables. Groq via GROQ_MODEL; Jina v5-text-small/1024 previously live-verified.
-- Managed Neon Auth SDK. Bitget Agent SDK3.3.1 unchanged, readOnlytrue/paperTradingfalse.
-- AgentKey official MCP https://api.agentkey.app/v1/mcp, private AGENTKEY_API_KEY; no guessed business tools.
+## Existing capabilities (backend domain-complete, history in agent-state/)
+- Neon Auth proxy /api/auth/[...path] + subject->Reflex user mapping: working (src/server/auth).
+- Decisions parse/confirm/context/[id]: working, no list endpoint.
+- Manual/import trades, reviews generate/[id], plan drift: working. Fresh Groq autopsy can fail grounding (UNSUPPORTED_MOTIVE_CLAIM), surface honestly.
+- DNA GET /api/dna + POST /api/patterns/recompute, POST /api/recall, Playbook GET/propose/decision: working.
+- Classic CSV preview/commit/imports/activities/purpose: working. GET /api/activities -> {activities,nextCursor}.
+- Landing page (196bfda) + mobile overlay nav (e7eb715): approved, locked.
 
-## Existing capabilities
-- Persistence/auth/decision/Groq/Jina foundations retained. Real auth and decision handler proof previously passed.
-- Trade/autopsy infrastructure implemented at 5ec3d29; genuine live review verified once (log-runner-autopsy-8192.txt). Grounded sparse autopsy ACCEPTED and live-verified at decision-autopsy.v22 via the actual route-handler rollback verifier (log-grounding-runner-v22.txt).
-- Sparse manual evidence now working/tested: optional/null execution fields, amount/cash-flow/cap observations in trade_events.facts, unknowns preserved, retrospective comments outside snapshot.
-- AgentKey transport/discovery/gateway + explicit primary/secondary context selection/provenance boundary implemented/tested. PARTIAL: initialization with configured key returned401, no catalog/business tool or execution plan verified. Default context checks real authentication then refuses unverified business execution.
-
-## MVP slices
-- [x] Market infrastructure, live successful payloads still blocked.
-- [x] Neon persistence.
-- [x] Groq/Jina foundation.
-- [x] Auth/decision capture.
-- [x] Genuine trade/autopsy live proof: first sparse autopsy + memory verified (score/quadrant honestly unknown).
-- [x] Decision DNA first slice (historical replay verified).
-- [x] Pre-Trade Recall read-only slice (live-verified).
-- [x] Playbook (deterministic, live-verified via historical replay).
-- [x] Bitget Classic CSV import (genuine export live-verified, rollback clean).
-- [ ] Hybrid recall/stress test.
+## Frontend MVP slices
+- [x] 3A Real Neon Auth UI (sign in/up, reset, sign out) + protected /app workspace shell + overview.
+- [ ] 3B Decision Desk: parse -> inspect -> correct -> confirm -> view saved decision.
+- [ ] 3C Trade Activity + Classic CSV import UI (preview, purpose, commit, history, reclassify).
+- [ ] 3D Autopsy + DNA screens (dimensions, evidence, coverage, drift, honest sparse states).
+- [ ] 3E Playbook + Pre-Trade Recall screens.
+- [ ] 3F Persistent end-to-end QA, cross-user isolation, deploy prep.
 
 ## Current slice
-- Bitget Classic CSV import DONE, lead-accepted, live-verified on the genuine private export (frozen log-classic-csv-live-owner-selected.txt, exit0). Schema spot-imports.ts + migration 0003_glossy_old_lace APPLIED to Neon: 4 new append-only tables spot_csv_imports/spot_activities/spot_executions/spot_activity_events, 23 total. Endpoints: POST /api/imports/bitget-classic/{preview,commit}, GET list/[id], GET /api/activities + [id], POST /api/activities/[id]/purpose. Lead owns parser/queries/verifier (bitget-classic-policy, bitget-classic-queries, verify-classic-csv.ts). Semantics: bounded multipart, write-free preview, confirmed + exact previewHash + per-order purpose on commit; same-hash reimport idempotent (0 inserts, existing purpose authoritative); occurrence-aware nested overlaps only; stored snapshots re-validated, canonical order = complete snapshot matching all stored execution keys; purpose audit contiguous from v1; no P&L/decision/trade linkage. Frozen proof facts: 2 genuine INJ/USDT sells + 2 fills, gross15.185USDT, fees0.015185USDT, net15.169815USDT, timezone unknown, costBasis/realizedPnl null, owner declared payment_conversion, cross-owner denied, injected batch failure fully rolled back on real Neon, second-connection NOWAIT blocked under owner lock, 0 permanent rows after rollback. Gates: focused classic-csv 51/51, full test:all 461/461, typecheck/build/diffcheck clean, lint passed 0 errors with 2 pre-existing unused-variable warnings in Playbook tests (log-classic-csv-completion-*). Backend milestones stopped per user; connected frontend is next, not started.
-- Self-Evolving Playbook DONE and lead-accepted, live-verified via historical replay (frozen log-playbook-runner-historical-replay.txt): deterministic propose/accept/reject/defer over recomputed DNA candidates, frozen provenance marker, append-only version chains (accepted root v1 -> active v3), accept-only lazy Jina, rollback 0. Full test:all then was 410/410.
-- Pre-Trade Recall DONE and lead-accepted, live-verified end to end (frozen log-recall-runner-live.txt; user-approved historical v22 replay supplies the corpus, NOT a new autopsy). POST /api/recall: owner-scoped eligible-memory filter before top-K, server-authored watchpoints/questions, raw proposal text only in the response, no durable proposal, no proposal/pattern/rule/memory mutation; only authenticated selector ai_runs recorded (rollback 0). Frozen actual matches on the genuine proposal: target-drift DNA 0.31401929259300454 (top), research 0.2915744359239605, accepted review 0.27313468136008756, inferred origin 0.23785375695113165 -> 1 RUNNER historical review + 3 observations, 0 established/emerging/rules/regimes, unknown outcome, no financial/recurrence claims. Groq model_selected openai/gpt-oss-120b attempts:1 enum IDs only (4 watchpointIds + 3 questionIds), no new prose; controlled timeout injection -> labeled deterministic_fallback 200; 4 owned evidence refs; foreign owner excluded. Watchpoint is remembered 1M->2M USD market-cap drift while holding (retrospective user report, unknown fills). Gates: focused recall 26/26 + contract SQL test, test:ai default-retry unchanged, full test:all 377/377 pass (48+65+58+13+138+29+26), typecheck/lint/build/diffcheck clean (log-recall-completion-*). EXPLAIN compile check on the recursive accepted-rule guard: available/rule/search all compiled, no fixtures persisted (log-recall-sql-check.txt). Note: 0.5747/rank1 sim belongs to the prior DNA query, NOT the recall proposal.
-- Decision DNA first slice DONE and lead-accepted AS HISTORICAL REPLAY ONLY (user-approved, not a fresh Groq autopsy): migration0002 (pattern_kind execution + owner fingerprint unique index) applied, owner-scoped advisory-locked recompute, deterministic candidates/narratives, append-only evidence links, retirement, Jina canonical-hash dedupe, read-only GET /api/dna with honest not_computed stats. Frozen replay proof: log-dna-runner-historical-replay.txt (real parser pure_impulse0.9, source v22 review 37.8125/provisional/80, 3 observations leak-research15 + pure_impulse-inference + target_drift-execution, 0 recurring edges/leaks/influences/execution/regimes, Jina v5/1024 rank1 sim0.5780120743506003, 3 document calls deduped across two identical recomputes, 6 owned links, foreign GET/search isolated, all pattern/link/embedding/marker and base rows 0 after rollback). Two fresh v22 autopsy attempts failed UNSUPPORTED_MOTIVE_CLAIM before the DNA stage; that upstream reliability blocker stays honest, no new autopsy is claimed. Prior accepted slice: sparse grounding v22 (log-grounding-runner-v22.txt).
+- 3A DONE. User signed in with their own account on http://localhost:3002: landed on /app, Overview showed email + "Linked to your private record", refresh kept session, sign-out -> /sign-in, /app redirected after. No test accounts created by the agent. Agent could not screenshot signed-in screens (no session in agent browser), so the signed-in shell was visually checked by the user only.
+- Files: src/proxy.ts (Neon middleware, loginUrl /sign-in, fails closed to /sign-in?status=unavailable), src/app/(auth)/{layout,sign-in,sign-up,forgot-password,reset-password}, src/components/auth/{auth-client,auth-forms,form-parts,auth-heading}, src/app/app/{layout,page}, src/components/workspace/{workspace-shell,overview}, access/page.tsx -> redirect /app, primitives ACCESS_HREF=/app + buttonClass.
+- SDK gotcha: @neondatabase/auth client THROWS AuthApiError {status, code} instead of returning {error}; authErrorMessage handles both.
+- Verified: anonymous /app 307 -> /sign-in, /access 307 -> /app, get-session 200 null, /api/activities 401, wrong password -> "Email or password is incorrect.", short password blocked client-side, reset without token explains next step, auth pages no overflow at 320/390/820/1440. type-check/lint/build pass.
 
 ## Completed
-- Applied drizzle/0001_supreme_squadron_supreme.sql: quantity/entry_price/opened_at nullable for manual evidence, CHECK requires them for Bitget. Original0000 unchanged.
-- Manual price/size/time/currency/fees unknowns may be omitted or null. No synthetic prices/epoch timestamps. Market caps never become entry/exit prices or realized PnL.
-- CashFlowBasis gross_excluding_fees needs known fees for net; net_including_fees uses actual total outflow/inflow without double-counting fees. Unknown basis/proceeds preserve unknown outcome. Matching declared cap currencies required for target comparison.
-- Parser decision-parse.v2 distinguishes unit price/cash/cap values; sparse autopsy decision-autopsy.v2 separates recollection/peaks from original knowledge. Untimed peak cannot prove TP opportunity while held.
-- Context snapshots preserve combined status, Bitget failures, separate secondary provenance and actual owned evidence IDs. Public market endpoint/providers untouched. No verified AgentKey business plan yet.
+-
 
-## Real verification
-- Bitget MAIN upgraded to UTA with a new project key triple: GET /api/v3/account/settings HTTP200/code00000, accountMode unified/hedge_mode (log-uta-new-keys-account.txt). UTA SPOT history over the checked 14-day window: 0 orders, fills list:null; documented Classic v2 history endpoints reject 40085 under unified mode (log-uta-history-visibility.txt). Old 40099 findings are historical, not the current blocker; Classic CSV import covers pre-upgrade history.
-- Public verifier ran ONCE: quote/history/sentiment all UPSTREAM_UNAVAILABLE. No fabricated context.
-- Reflex backend AgentKey client init401 (historical, unretested), no catalog/business calls. Devin-side AgentKey tools work via OAuth. Artifact agentkey-discovery-status.json records the captured backend failure.
-- Current app safety binding B external subject0a20e1f0-ee85-4f8a-8963-edd3d5eb32da -> Reflex2a2cac1d-b014-40a3-b278-0399588511db. A7ca7556d-367c-4cfe-b0a8-f7c32c05ffcb -> Reflex09a59c64-c923-4a49-b5a1-839953738ee0 is excluded. Native negative import probes A403/B400 confirmed gate without provider calls. This is application binding, not proof of Bitget-account ownership.
-- Both existing managed test sessions refreshed via real signin, same identities, no new accounts. Anonymous manual401, real-session all-null manual400 before trade insert.
-- Lead database invariant test verified nullable manual columns + exact Bitget check, rolled back all isolated fixtures (0 users/decisions/trades). This is NOT genuine trade/autopsy proof.
-- Full checkpoint274 tests passed historically; later full suite292passed; full suite311tests 310pass/1fail historical. Latest full suite322pass (npm run test:all, log-grounding-final20-tests.txt). Final22 focused138pass; AgentKey deadline race occurred once at final21 and passed isolated retry, absent at final22. Typecheck/lint/build/diffcheck clean (log-grounding-final22-*). DNA completion: focused patterns29/29 + affected migration/verification tests2/2, typecheck/lint/build/diffcheck clean (log-dna-completion-*); last DNA-era test:all was 321pass+1 known AgentKey deadline-race fail (isolated pass). Recall era: full test:all 377/377 pass (log-recall-completion-testall.txt). Playbook era: 410/410. Classic-CSV era: 461/461 (log-classic-csv-completion-testall.txt).
-- verify:autopsy with no input file returns GENUINE_TRADE_INPUT_REQUIRED (historical missing-input guard, now superseded by the genuine proof below).
-- FIRST GENUINE LIVE PROOF PASSED (frozen log-runner-autopsy-8192.txt): real Groq parse pure_impulse exact quotes, confirm, manual RUNNER trade (amount20/fees10, caps20k->585k 29.25x, peak1.6m 80x, execution fields unknown), decision-autopsy.v2 at Groq8192 (2048-budget requests failed json_validate_failed; 8192-budget run succeeded with3140 completion tokens), dims research10/risk40/execution45/behavior30 + context null, coverage80 overall null, outcome unknown quadrant null, 8 owned evidence links, foreign404, Jina v5/1024 rank1 sim0.2946, rollback0rows. Product gap: v3 prompt for target-revision specifics failed grounding/provider checks, reverted; tighten before DNA.
-- ACCEPTED sparse proof (frozen, decision-autopsy.v22, log-grounding-runner-v22.txt): real route handlers + managed session + genuine private input + Neon rollback. Parser pure_impulse confidence0.9 (inference, not self-described fact). Dims research15/contextnull/risk55/execution45/behavior40, score37.8125 provisional, coverage80, outcome unknown, quadrant null. Plan drift1M->2M (2x/+100%), peak1.6M (+60%), exit585k 63.4375% below peak/41.5% below original, valuation only not PnL. Server-derived summary + deterministic lesson prefix + model takeaway (lessonBasis server_facts_plus_model_process_takeaway). Jina v5/1024 rank1 sim0.6597294217590087 on the exact user query, owner isolation verified, foreignGET404, immutable snapshot, rollback0rows. Original pre-session v11 response not retained; reproduced v11 rejection at log-grounding-diagnostic-v11.txt (RETROSPECTIVE_ATTRIBUTION_REQUIRED summary). Candidate v15/v17/v18/v20 runs were technical passes/failures but NOT accepted; keep them historical, do not claim their scores.
-- AgentKey skill1.14.0 installed in .devin/skills/agentkey. Devin project MCP .devin/mcp_config.json uses HTTP https://api.agentkey.app/v1/mcp with no key header. OAuth flow initiated; native Devin tools subsequently callable. Real agentkey_account returned10credits; CoinMarketCap/getCryptocurrencyQuotesLatestV3 {symbol:BTC,convert:USD} returned Bitcoin id1/slugbitcoin and USD quote (provider timestamp2026-10-07T21:51:05Z), charged0.6credits, provider error_code0. No API-key fallback or Reflex backend changes. This proves agent-client access only, not the existing Reflex backend integration; prior backend401 remains historical/unretested.
-- Evidence C:/Users/USER/bitget-mcp-discovery: log-bitget-account-diagnosis.txt, log-context-proof-market.txt, agentkey-discovery-status.json, log-binding-final.txt, log-sparse-{db-live,http-smoke,testall,tests,typecheck,lint,build}.txt, log-real-proof-blocker.txt, log-plan-drift-{runner-v6,runner-v11,historical-regrade,full-tests,v11-tests,v11-typecheck,v11-lint,v11-build}.txt, log-grounding-runner-v22.txt (accepted proof), log-grounding-diagnostic-v11.txt (reproduced v11 rejection), log-grounding-runner-{v12..v21}*.txt (historical candidates), log-grounding-final22-{typecheck,lint,build,diffcheck}.txt, log-grounding-final20-tests.txt (full322), log-grounding-final22.diff.
+## Blockers
+- Fresh autopsy grounding reliability (affects 3D/3F, not 3A).
 
-## Remaining MVP gaps / blockers
-- Genuine input supplied and verified. Remaining honest unknowns: execution timestamps/proceeds/quantities stay null; market-cap ratios are not realized return.
-- Quality gap record: v2 autopsy passed but produced generic lessons that miss the user's recalled 1M->2M target revision; v3 refinement failed grounding/provider checks and was reverted. Resolved by the deterministic plan-drift detector plus the accepted v22 grounded contract (server-derived summary, deterministic fact prefix, model process takeaway).
-- Devin-side AgentKey works (OAuth tools, agentkey_account10credits, CMC call0.6cr, Serper search succeeded but contract identity unproven). Reflex backend AgentKey401 is historical/unretested; still needs valid key + verified server read plan.
-- Bitget Agentic local authorized:true but getAccountInfo read fails HTTP400 exchange environment (MCP does not expose provider40099); private-SDK corrected-env identity diagnostic (log-bitget-identity-v3-v2.txt): BOTH GET /api/v3/account/info AND GET /api/v2/spot/account/info returned HTTP400/provider40099 under the corrected .env-matching credentials, Case C environment mismatch unresolved, not proof of classic vs UTA. Superseded by the new UTA key triple verification above; kept historical. BindingB stays unchanged.
-- Historical public data unavailable. Policy v2 returns null below 70% assessed-weight coverage, provisional at 70-99%, final at 100%; missing dimensions remain null. Quadrant stays null with provisional/unassessed process or unknown financial outcome.
-- Three managed test accounts remain from previous run, no direct managed-table cleanup. Refreshed credentials/cookies private outside repo, never committed.
-- No remote/no push. STATE uncommitted; docs/architecture.md/public/brand preserved. Historical audit9findings unremediated.
+## Verification
+-
 
 ## Next action
-- Backend milestones stopped per user. Next priority is the connected frontend and persistent end-to-end user experience; not started. No CSV permanent import remains in Neon (verifier rolled back all rows).
-- Fresh-autopsy UNSUPPORTED_MOTIVE_CLAIM blocker unchanged. Reflex backend AgentKey needs a future verified read plan; client-side works.
-
-## Runtime
-- Production localhost:3002 running the Classic-CSV build: PID23784 shell31e870 (next start -p 3002, repo-owned), GET / 200, anonymous POST /api/imports/bitget-classic/preview 401 + GET /api/activities 401. Prior owned PIDs stopped only after repo ownership check. Foreign3000/3001 untouched. No configuration/binding changes made by the agent.
+- 3B Decision Desk at /app/decisions: parse form -> structured result -> correct supported fields -> confirm -> saved view. Read src/server/decisions http/schemas first (no list endpoint exists; keep a client-side recent list only if honest, or add nothing). Enable the sidebar item in workspace-shell NAV and the Overview step.
+- For signed-in UI screenshots, ask the user to sign in again or share captures; the agent browser has no session.
