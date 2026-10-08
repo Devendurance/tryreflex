@@ -426,8 +426,9 @@ test("closedAt implies closed execution state, missing timestamps stay null", as
 test("migration adds the bitget execution check without touching other constraints", () => {
   const dir = path.join(process.cwd(), "drizzle");
   const files = readdirSync(dir).filter((f) => f.endsWith(".sql") && !f.startsWith("0000"));
-  assert.equal(files.length, 1);
-  const sql = readFileSync(path.join(dir, files[0]), "utf8");
+  const withCheck = files.filter((f) => readFileSync(path.join(dir, f), "utf8").includes('"trades_bitget_execution_required"'));
+  assert.equal(withCheck.length, 1);
+  const sql = readFileSync(path.join(dir, withCheck[0]), "utf8");
   assert.ok(sql.includes('"trades_bitget_execution_required"'));
   assert.ok(sql.includes("provider <> 'bitget'"));
   assert.ok(sql.includes("DROP NOT NULL"));

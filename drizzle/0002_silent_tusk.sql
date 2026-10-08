@@ -1,0 +1,2 @@
+ALTER TYPE "public"."pattern_kind" ADD VALUE 'execution';--> statement-breakpoint
+CREATE UNIQUE INDEX "patterns_dna_fingerprint_unique" ON "patterns" USING btree ("user_id",(observed_statistics->>'fingerprint')) WHERE observed_statistics->>'producer'='decision-dna.v1';

@@ -15,6 +15,13 @@
       "when": 1791398499566,
       "tag": "0001_supreme_squadron_supreme",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791454163661,
+      "tag": "0002_silent_tusk",
+      "breakpoints": true
     }
   ]
 }

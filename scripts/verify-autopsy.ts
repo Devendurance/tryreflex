@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { createHash } from "node:crypto";
 import { createRepositories } from "../src/server/db/repositories";
 import { createMemoryStore } from "../src/server/ai/memory-store";
 import { buildMemoryText } from "../src/server/ai/memory-text";
@@ -141,10 +142,56 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ status: "ai_run_recorded", pipeline: meta.pipeline ?? null, model: meta.model ?? null, promptVersion: meta.promptVersion ?? null, runStatus: meta.status ?? null, safeErrors: meta.validationErrors ?? null, tokenUsage: meta.tokenUsage ?? null }));
       return saved;
     } } });
+    const replayPath = process.env.VERIFY_DECISION_DNA === "1" ? process.env.VERIFY_ACCEPTED_REVIEW_FILE : undefined;
+    const replayFile = replayPath ? await readFile(replayPath, "utf8") : null;
+    const replayStart = replayFile?.lastIndexOf('\n{\n  "status": "verified"') ?? -1;
+    if (replayFile !== null) assert.ok(replayStart >= 0, "accepted historical artifact must contain its final verified report");
+    const historicalSchema = z.looseObject({
+      status: z.literal("verified"), model: z.literal("openai/gpt-oss-120b"), promptVersion: z.literal("decision-autopsy.v22"),
+      originalSnapshotPreserved: z.literal(true), confirmedSnapshot: z.record(z.string(), z.unknown()),
+      dimensionResults: z.array(z.looseObject({ dimension: z.enum(REVIEW_DIMENSIONS), score: z.string().nullable(), explanation: z.string(), confidence: z.string(), observedFacts: z.array(z.strictObject({ evidenceId: z.string().uuid(), quote: z.string() })), inferredFindings: z.array(z.strictObject({ finding: z.string(), evidenceRefs: z.array(z.string().uuid()) })) })).length(5),
+      lessons: z.array(z.strictObject({ text: z.string(), evidenceRefs: z.array(z.string().uuid()) })).length(1),
+      evidence: z.array(z.looseObject({ evidenceId: z.string().uuid(), kind: z.string(), label: z.string(), text: z.string() })),
+      rollback: z.looseObject({ status: z.literal("verified"), remainingRows: z.record(z.string(), z.literal(0)) }),
+    });
+    const historical = replayFile === null ? null : historicalSchema.parse(JSON.parse(replayFile.slice(replayStart)));
+    if (historical) assert.deepEqual(historical.confirmedSnapshot, snapshot, "historical replay must preserve the genuine confirmed snapshot exactly");
     const llm: LLMProvider = {
       generateText: (generationRequest) => groq.generateText(generationRequest),
       generateStructured: async <T>(structuredRequest: StructuredGenerationRequest<T>) => {
         const originalValidate = structuredRequest.validate;
+        if (historical) {
+          const supplied = z.looseObject({ evidenceLedger: z.array(z.looseObject({ evidenceId: z.string().uuid(), evidenceType: z.string(), quotes: z.array(z.looseObject({ quoteRef: z.string(), quote: z.string() })) })), planDrift: z.array(z.looseObject({ behaviorQuoteRefs: z.array(z.string()).min(1) })).length(1) }).parse(JSON.parse(structuredRequest.input));
+          const quoteFor = (fact: { evidenceId: string; quote: string }) => {
+            const oldSource = historical.evidence.find((entry) => entry.evidenceId === fact.evidenceId);
+            assert.ok(oldSource && oldSource.text.includes(fact.quote));
+            const source = supplied.evidenceLedger.find((entry) => entry.evidenceType === oldSource.kind && entry.quotes.some((quote) => quote.quote === fact.quote));
+            const quote = source?.quotes.find((entry) => entry.quote === fact.quote);
+            assert.ok(quote, "every historical quote must map exactly to its newly owned source evidence");
+            return quote.quoteRef;
+          };
+          const historicalLesson = historical.lessons[0].text;
+          const takeawayStart = historicalLesson.indexOf("When you raise your profit target,");
+          const takeawayEnd = historicalLesson.indexOf(" These are retrospective market-cap observations,");
+          assert.ok(takeawayStart >= 0 && takeawayEnd > takeawayStart, "frozen accepted lesson must retain its original model takeaway");
+          const wire = {
+            dimensions: historical.dimensionResults.map((dimension) => ({
+              dimension: dimension.dimension, score: dimension.score === null ? null : Number(dimension.score), explanation: dimension.explanation, confidence: Number(dimension.confidence),
+              observedFacts: dimension.observedFacts.map((fact) => ({ quoteRef: quoteFor(fact) })),
+              inferredFindings: dimension.inferredFindings.map((finding) => ({ finding: finding.finding, supportQuotes: finding.evidenceRefs.map((id) => {
+                const fact = dimension.observedFacts.find((entry) => entry.evidenceId === id);
+                assert.ok(fact, "historical inferred finding must retain observed source support");
+                return quoteFor(fact);
+              }) })),
+            })),
+            lessons: [],
+            planDriftLessons: [{ text: historicalLesson.slice(takeawayStart, takeawayEnd), executionQuoteRef: supplied.planDrift[0].behaviorQuoteRefs[0], behavioralQuoteRef: supplied.planDrift[0].behaviorQuoteRefs[0] }],
+          };
+          const value = structuredRequest.schema.parse(wire);
+          originalValidate?.(value);
+          const saved = await runRecorder.record({ pipeline: "decision-autopsy", model: historical.model, promptVersion: structuredRequest.promptVersion, inputEntityIds: structuredRequest.inputEntityIds, status: "success", latencyMs: 0, tokenUsage: { usage: {}, run: { provider: "historical_groq_review_replay", sourceArtifactSha256: createHash("sha256").update(replayFile!).digest("hex"), originalPromptVersion: historical.promptVersion, noNewAutopsyGeneration: true } } });
+          return { value, provider: "historical_groq_review_replay", model: historical.model, promptVersion: structuredRequest.promptVersion, runId: String(saved.id), attempts: 0 };
+        }
         return groq.generateStructured<T>({
           ...structuredRequest,
           validate: (wireValue) => {
@@ -245,7 +292,8 @@ async function main(): Promise<void> {
     assert.equal(run.rows[0]?.pipeline, "decision-autopsy");
     assert.equal(run.rows[0]?.status, "success");
     const report: Record<string, unknown> = {
-      status: "verified", verificationSurface: "actual route handlers + real managed sessions + genuine user input + Neon rollback",
+      status: "verified", verificationSurface: historical ? "historical accepted real Groq review replay + actual route handlers + real managed sessions + genuine user input + real Jina + Neon rollback" : "actual route handlers + real managed sessions + genuine user input + Neon rollback",
+      autopsySource: historical ? "frozen_accepted_groq_v22_review" : "new_live_groq_generation", newGroqAutopsyGenerated: historical === null,
       model: run.rows[0].model, promptVersion: run.rows[0].prompt_version,
       decisionOriginLabels: draft.inference.origins.map((origin: { label: string }) => origin.label),
       decisionOrigins: draft.inference.origins, originBasis: "model inference, not an independently user-confirmed classification",
@@ -289,12 +337,82 @@ async function main(): Promise<void> {
       assert.ok(!foreignHits.some((hit) => hit.entity_id === reviewId));
       report.memory = { status: "verified", model: stored.model, dimensions: stored.dimensions, textVersion: canonical.version, sourceText: canonical.text, query: memoryQuery, retrievalRank: rank + 1, similarity: hits[rank].similarity, ownerIsolation: "verified" };
     }
+    const dnaPatternIds: string[] = [];
+    if (process.env.VERIFY_DECISION_DNA === "1") {
+      verificationStage = "decision_dna";
+      const { createPatternsRepository } = await import("../src/server/patterns/repository");
+      const { createRecomputePatternsHandler, createDNAHandler } = await import("../src/server/patterns/http");
+      const { DNA_QUERIES } = await import("../src/server/decision-dna-queries");
+      const existing = await client.query("SELECT id FROM public.patterns WHERE user_id=$1 AND observed_statistics->>'producer'='decision-dna.v1'", [owner.userId]);
+      assert.equal(existing.rows.length, 0, "sparse DNA proof requires no pre-existing DNA patterns for this verification owner");
+      const jina = new JinaEmbeddingProvider();
+      let documentCalls = 0;
+      const countedJina = {
+        embedDocument: async (text: string) => { documentCalls += 1; return jina.embedDocument(text); },
+        embedQuery: (text: string) => jina.embedQuery(text),
+        embedMany: (texts: readonly string[], mode: "document" | "query") => jina.embedMany(texts, mode),
+      };
+      const recompute = createRecomputePatternsHandler({ db: session, authProvider: authA, embedder: countedJina });
+      const first = await expectSuccess(await recompute(request({})), 200);
+      const view = await expectSuccess(await createDNAHandler({ db: session, authProvider: authA })(), 200);
+      assert.equal(first.eventsLoaded, 1, "genuine sparse proof must contain exactly one eligible review");
+      assert.equal(view.evidenceStats.independentDecisionCount, 1);
+      for (const key of ["edges", "leaks", "influences", "executionPatterns", "regimes"] as const) assert.equal(view[key].length, 0);
+      assert.ok(view.observations.length > 0);
+      assert.ok(view.observations.every((item: { status: string; count: number }) => item.status === "observation" && item.count === 1));
+      const targetObservation = view.observations.find((item: { category: string; stats: { feature: string } }) => item.category === "execution" && item.stats.feature === "target_drift");
+      assert.ok(targetObservation, "genuine target drift must remain an observation");
+      assert.deepEqual(targetObservation.supportingDecisionIds, [decisionId]);
+      assert.deepEqual(targetObservation.supportingReviewIds, [reviewId]);
+      for (const item of view.observations) {
+        assert.ok(item.evidenceRefs.length > 0);
+        assert.ok(item.evidenceRefs.every((id: string) => item.evidence.some((entry: { id: string }) => entry.id === id)));
+        assert.equal(item.stats.supporting.knownOutcomes.unknown, 1);
+        assert.equal(item.stats.supporting.knownOutcomes.positive, 0);
+        assert.equal(item.stats.supporting.knownOutcomes.negative, 0);
+      }
+      for (const origin of draft.inference.origins) {
+        const observation = view.observations.find((item: { category: string; stats: { feature: string; basis: string } }) => item.category === "influence" && item.stats.feature === origin.label && item.stats.basis === "inference");
+        assert.ok(observation, "real parser origin stays inference in sparse DNA");
+      }
+      dnaPatternIds.push(...first.patterns.map((item: { id: string }) => item.id));
+      assert.equal(documentCalls, dnaPatternIds.length);
+      const second = await expectSuccess(await recompute(request({})), 200);
+      assert.deepEqual(second.patterns.map((item: { id: string }) => item.id), dnaPatternIds);
+      assert.equal(documentCalls, dnaPatternIds.length, "unchanged canonical pattern text must not be re-embedded");
+      const marker = await client.query("SELECT count(*)::int AS count FROM public.evidence_records WHERE user_id=$1 AND kind='prior_review' AND review_id=$2 AND label='Decision DNA supporting review'", [owner.userId, reviewId]);
+      assert.equal(marker.rows[0].count, 1);
+      const patternLinks = await client.query("SELECT l.pattern_id,l.evidence_id,e.user_id FROM public.pattern_evidence l JOIN public.evidence_records e ON e.user_id=l.user_id AND e.id=l.evidence_id WHERE l.user_id=$1 AND l.pattern_id=ANY($2::uuid[])", [owner.userId, dnaPatternIds]);
+      assert.ok(patternLinks.rows.length > 0);
+      assert.ok(patternLinks.rows.every((row) => row.user_id === owner.userId));
+      const foreignOwner = await authB.getContext();
+      assert.ok(foreignOwner);
+      assert.notEqual(foreignOwner.userId, owner.userId);
+      const foreignView = await expectSuccess(await createDNAHandler({ db: session, authProvider: authB })(), 200);
+      const foreignIds = [...foreignView.observations, ...foreignView.edges, ...foreignView.leaks, ...foreignView.influences, ...foreignView.executionPatterns, ...foreignView.regimes].map((item: { id: string }) => item.id);
+      assert.ok(!foreignIds.some((id: string) => dnaPatternIds.includes(id)));
+      const queryText = "I changed my profit target after the trade had already exceeded my original target.";
+      const embeddedQuery = await jina.embedQuery(queryText);
+      const hits = await client.query(DNA_QUERIES.searchCurrentPatternMemory, [owner.userId, `[${embeddedQuery.vector.join(",")}]`, embeddedQuery.model, embeddedQuery.dimensions, 20]);
+      const rank = hits.rows.findIndex((hit) => hit.entity_id === targetObservation.id);
+      assert.ok(rank >= 0, "target drift observation must be semantically retrievable");
+      const foreignHits = await client.query(DNA_QUERIES.searchCurrentPatternMemory, [foreignOwner.userId, `[${embeddedQuery.vector.join(",")}]`, embeddedQuery.model, embeddedQuery.dimensions, 20]);
+      assert.ok(!foreignHits.rows.some((hit) => dnaPatternIds.includes(String(hit.entity_id))));
+      const ownedPattern = await createPatternsRepository(session, foreignOwner).getDNA();
+      assert.ok(!ownedPattern.observations.some((item) => dnaPatternIds.includes(item.id)));
+      report.decisionDNA = { status: "verified", view, repeatedRecomputeStable: true, documentEmbeddingCalls: documentCalls, evidenceLinks: patternLinks.rows.length, ownerIsolation: "verified", retrieval: { query: queryText, observationId: targetObservation.id, rank: rank + 1, similarity: hits.rows[rank].similarity, model: embeddedQuery.model, dimensions: embeddedQuery.dimensions, meaning: "retrieval in this verification corpus only" } };
+    }
     await client.query("ROLLBACK");
     inTransaction = false;
     const remaining = await client.query<{ decisions: number; trades: number; reviews: number; dimensions: number; embeddings: number; aiRuns: number; evidence: number; events: number }>(
       "SELECT (SELECT count(*)::int FROM public.decisions WHERE id=$1) AS decisions,(SELECT count(*)::int FROM public.trades WHERE id=$2) AS trades,(SELECT count(*)::int FROM public.reviews WHERE id=$3) AS reviews,(SELECT count(*)::int FROM public.review_dimensions WHERE review_id=$3) AS dimensions,(SELECT count(*)::int FROM public.memory_embeddings WHERE entity_type='review' AND entity_id=$3) AS embeddings,(SELECT count(*)::int FROM public.ai_runs WHERE id=ANY($4::uuid[])) AS \"aiRuns\",(SELECT count(*)::int FROM public.evidence_records WHERE decision_id=$1 OR trade_id=$2) AS evidence,(SELECT count(*)::int FROM public.trade_events WHERE trade_id=$2) AS events", [decisionId, tradeId, reviewId, [draft.ai.runId, runId]],
     );
     assert.deepEqual(remaining.rows[0], { decisions: 0, trades: 0, reviews: 0, dimensions: 0, embeddings: 0, aiRuns: 0, evidence: 0, events: 0 });
+    if (process.env.VERIFY_DECISION_DNA === "1") {
+      const dnaRemaining = await client.query("SELECT (SELECT count(*)::int FROM public.patterns WHERE user_id=$1 AND id=ANY($2::uuid[])) AS patterns,(SELECT count(*)::int FROM public.pattern_evidence WHERE user_id=$1 AND pattern_id=ANY($2::uuid[])) AS links,(SELECT count(*)::int FROM public.memory_embeddings WHERE user_id=$1 AND entity_type='pattern' AND entity_id=ANY($2::uuid[])) AS embeddings,(SELECT count(*)::int FROM public.evidence_records WHERE user_id=$1 AND review_id=$3 AND kind='prior_review') AS reviewEvidence", [owner.userId, dnaPatternIds, reviewId]);
+      assert.deepEqual(dnaRemaining.rows[0], { patterns: 0, links: 0, embeddings: 0, reviewevidence: 0 });
+      report.decisionDNARollback = { status: "verified", remainingRows: dnaRemaining.rows[0] };
+    }
     console.log(JSON.stringify({ ...report, rollback: { status: "verified", remainingRows: remaining.rows[0] } }, null, 2));
   } finally {
     try {

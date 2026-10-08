@@ -10,11 +10,12 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { users } from "./core";
 
-export const patternKindEnum = pgEnum("pattern_kind", ["edge", "leak", "influence", "regime", "timing"]);
+export const patternKindEnum = pgEnum("pattern_kind", ["edge", "leak", "influence", "regime", "timing", "execution"]);
 export const patternStatusEnum = pgEnum("pattern_status", ["observation", "emerging", "established"]);
 export const ruleStatusEnum = pgEnum("rule_status", ["proposed", "active", "rejected", "deferred"]);
 export const ruleUserDecisionEnum = pgEnum("rule_user_decision", ["accepted", "rejected", "deferred"]);
@@ -37,6 +38,9 @@ export const patterns = pgTable(
   },
   (t) => [
     unique("patterns_user_id_id_unique").on(t.userId, t.id),
+    uniqueIndex("patterns_dna_fingerprint_unique")
+      .on(t.userId, sql`(observed_statistics->>'fingerprint')`)
+      .where(sql`observed_statistics->>'producer'='decision-dna.v1'`),
     check("patterns_evidence_count_nonnegative", sql`evidence_count >= 0`),
     check("patterns_confidence_range", sql`confidence IS NULL OR (confidence >= 0 AND confidence <= 1)`),
     check("patterns_observed_statistics_object", sql`jsonb_typeof(observed_statistics) = 'object'`),

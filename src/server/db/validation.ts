@@ -204,7 +204,7 @@ export const appendReviewDimensionSchema = z.strictObject({
 });
 
 export const recordPatternSchema = z.strictObject({
-  kind: z.enum(["edge", "leak", "influence", "regime", "timing"]),
+  kind: z.enum(["edge", "leak", "influence", "regime", "timing", "execution"]),
   status: z.enum(["observation", "emerging", "established"]),
   description: z.string(),
   observedStatistics: jsonObjectSchema,
