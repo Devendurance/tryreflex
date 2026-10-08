@@ -90,7 +90,7 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-function assertSameOrigin(request: Request): void {
+export function assertSameOrigin(request: Request): void {
   if (request.method === "GET" || request.method === "HEAD") return;
   const fetchSite = request.headers.get("sec-fetch-site");
   if (fetchSite === "cross-site") throw new ForbiddenOriginError();

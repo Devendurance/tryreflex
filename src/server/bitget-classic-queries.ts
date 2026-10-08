@@ -1,0 +1,17 @@
+export const CLASSIC_CSV_QUERIES = {
+  lockOwner: `SELECT id FROM public.users WHERE id=$1 FOR UPDATE`,
+  findImport: `SELECT * FROM public.spot_csv_imports WHERE user_id=$1 AND account_scope=$2 AND source_hash=$3 LIMIT 1`,
+  getImport: `SELECT * FROM public.spot_csv_imports WHERE user_id=$1 AND id=$2 LIMIT 1`,
+  listImports: `SELECT i.* FROM public.spot_csv_imports i WHERE i.user_id=$1 AND ($2::uuid IS NULL OR (i.imported_at,i.id)<(SELECT c.imported_at,c.id FROM public.spot_csv_imports c WHERE c.user_id=$1 AND c.id=$2)) ORDER BY i.imported_at DESC,i.id DESC LIMIT $3`,
+  insertImport: `INSERT INTO public.spot_csv_imports(user_id,account_scope,source_hash,parser_version,source_filename,order_count,execution_count,warnings) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+  findOrders: `SELECT * FROM public.spot_activities WHERE user_id=$1 AND account_scope=$2 AND order_id=ANY($3::text[]) ORDER BY order_id,id`,
+  getActivity: `SELECT * FROM public.spot_activities WHERE user_id=$1 AND id=$2 LIMIT 1`,
+  listActivities: `SELECT a.* FROM public.spot_activities a WHERE a.user_id=$1 AND ($2::uuid IS NULL OR (a.created_at,a.id)<(SELECT c.created_at,c.id FROM public.spot_activities c WHERE c.user_id=$1 AND c.id=$2)) ORDER BY a.created_at DESC,a.id DESC LIMIT $3`,
+  insertActivity: `INSERT INTO public.spot_activities(user_id,account_scope,exchange,source_kind,order_id,identity_hash,base_asset,quote_asset,trading_pair,direction) VALUES($1,$2,'bitget','classic_spot_csv',$3,$4,$5,$6,$7,$8) RETURNING *`,
+  executions: `SELECT * FROM public.spot_executions WHERE user_id=$1 AND activity_id=ANY($2::uuid[]) ORDER BY activity_id,execution_key,id`,
+  insertExecution: `INSERT INTO public.spot_executions(user_id,activity_id,execution_key,signature,occurrence,timestamp_text,timezone_status,price,quantity,gross_volume,fee_amount,fee_currency,reported) VALUES($1,$2,$3,$4,$5,$6,'unknown',$7,$8,$9,$10,$11,$12) RETURNING *`,
+  events: `SELECT * FROM public.spot_activity_events WHERE user_id=$1 AND activity_id=ANY($2::uuid[]) ORDER BY activity_id,created_at,id`,
+  importEvents: `SELECT * FROM public.spot_activity_events WHERE user_id=$1 AND import_id=$2 AND event_type='source_snapshot' ORDER BY activity_id,id`,
+  latestPurposes: `SELECT DISTINCT ON(activity_id) * FROM public.spot_activity_events WHERE user_id=$1 AND activity_id=ANY($2::uuid[]) AND event_type='purpose_change' ORDER BY activity_id,event_version DESC,id DESC`,
+  insertEvent: `INSERT INTO public.spot_activity_events(user_id,activity_id,import_id,event_type,event_version,data) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
+} as const;

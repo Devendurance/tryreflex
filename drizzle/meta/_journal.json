@@ -22,6 +22,13 @@
       "when": 1791454163661,
       "tag": "0002_silent_tusk",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791474566433,
+      "tag": "0003_glossy_old_lace",
+      "breakpoints": true
     }
   ]
 }
