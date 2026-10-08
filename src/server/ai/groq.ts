@@ -321,7 +321,7 @@ export class GroqLLMProvider implements LLMProvider {
         status,
         latencyMs: Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
         tokenUsage,
-        validationErrors: error ? [{ category: error.code }] : undefined,
+        validationErrors: error ? [{ category: error.code, ...(error.grounding ? { grounding: error.grounding } : {}) }] : undefined,
       });
       const runId = run.id;
       if (typeof runId !== "string" || runId.length === 0) throw new Error("missing run id");

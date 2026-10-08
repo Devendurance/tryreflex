@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AIError } from "../ai/errors";
+import { AIError, groundingFailure } from "../ai/errors";
 import type { LLMProvider } from "../ai/types";
 import {
   isDomainError,
@@ -78,6 +78,22 @@ interface CatalogEntry {
   id: string;
   kind: string;
   text: string;
+  sourceEntityId?: string;
+  knowledgeBasis?:
+    | "decision_time_user_report"
+    | "recollected_decision"
+    | "reported_execution"
+    | "retrospective_execution"
+    | "deterministic_derived"
+    | "decision_source"
+    | "verified_decision_time_context";
+  timing?:
+    | "decision_time_reported"
+    | "retrospective_recollection"
+    | "execution_time_unknown"
+    | "derived_from_owned_evidence"
+    | "verified_decision_time";
+  normalizedFact?: Record<string, unknown>;
 }
 
 export interface AutopsyQuote { quoteRef: string; evidenceId: string; quote: string }
@@ -90,46 +106,166 @@ export function groundedAutopsySchema(catalog: readonly { id: string; text: stri
     if (quotes.length === 0) throw new AIError("SCHEMA");
     return quotes.map((quote) => ({ evidenceId: entry.id, quote }));
   }).map((quote, index) => ({ quoteRef: `q${index}`, ...quote }));
-  const selector = z.enum(quoteCatalog.map((quote) => quote.quoteRef) as [string, ...string[]]);
+  const selectorQuotes = quoteCatalog.filter((quote) => !/^Self-assessment:\s*/i.test(quote.quote));
+  if (selectorQuotes.length === 0) throw new AIError("SCHEMA");
+  const selector = z.enum(selectorQuotes.map((quote) => quote.quoteRef) as [string, ...string[]]);
+  const driftKeys = [
+    ...new Set(
+      planDrift.flatMap((finding) => {
+        const keys = selectorQuotes
+          .filter(
+            (quote) =>
+              quote.evidenceId === finding.ordering.evidenceId &&
+              (quote.quote.includes(finding.ordering.quote) ||
+                quote.quote.includes(finding.observedFacts[1].quote)),
+          )
+          .map((quote) => quote.quoteRef);
+        if (keys.length === 0) {
+          groundingFailure("PLAN_DRIFT_EVIDENCE_MISMATCH", "planDrift", finding.evidenceRefs);
+        }
+        return keys;
+      }),
+    ),
+  ];
+  const driftSelector = planDrift.length > 0 ? z.enum(driftKeys as [string, ...string[]]) : selector;
   const fact = z.strictObject({ quoteRef: selector });
-  const schema = autopsySchema.extend({
+  const schema = autopsySchema.omit({ summary: true }).extend({
     dimensions: z.array(dimensionEntrySchema.omit({ evidenceRefs: true }).extend({
       observedFacts: z.array(fact),
       inferredFindings: z.array(dimensionEntrySchema.shape.inferredFindings.element.omit({ evidenceRefs: true }).extend({ supportQuotes: z.array(selector).min(1) })),
     })).length(5),
-    lessons: z.array(autopsySchema.shape.lessons.element.omit({ evidenceRefs: true }).extend({ supportQuotes: z.array(selector).min(1) })),
-    planDriftLessons: z.array(z.strictObject({ text: z.string().min(1).max(1000) })).length(planDrift.length),
+    lessons: (() => {
+      const items = z.array(autopsySchema.shape.lessons.element.omit({ evidenceRefs: true }).extend({ supportQuotes: z.array(selector).min(1) }));
+      return planDrift.length > 0 ? items.length(0) : items;
+    })(),
+    planDriftLessons: z.array(z.strictObject({
+      text: z.string().min(1).max(400).regex(/^[^0-9]*$/),
+      executionQuoteRef: driftSelector,
+      behavioralQuoteRef: driftSelector,
+    })).length(planDrift.length),
   });
   return { schema, quoteCatalog };
 }
 
 export function resolveAutopsyQuotes(value: unknown, quoteCatalog: readonly AutopsyQuote[], planDrift: readonly TargetDriftFinding[] = []): AutopsyResult {
   const support = z.array(z.string().min(1)).min(1);
-  const wire = autopsySchema.extend({
+  const wire = autopsySchema.omit({ summary: true }).extend({
     dimensions: z.array(dimensionEntrySchema.omit({ evidenceRefs: true }).extend({
       observedFacts: z.array(z.strictObject({ quoteRef: z.string().min(1) })),
       inferredFindings: z.array(dimensionEntrySchema.shape.inferredFindings.element.omit({ evidenceRefs: true }).extend({ supportQuotes: support })),
     })).length(5),
-    lessons: z.array(autopsySchema.shape.lessons.element.omit({ evidenceRefs: true }).extend({ supportQuotes: support })),
-    planDriftLessons: z.array(z.strictObject({ text: z.string().min(1).max(1000) })).length(planDrift.length),
+    lessons: (() => {
+      const items = z.array(autopsySchema.shape.lessons.element.omit({ evidenceRefs: true }).extend({ supportQuotes: support }));
+      return planDrift.length > 0 ? items.length(0) : items;
+    })(),
+    planDriftLessons: z.array(z.strictObject({
+      text: z.string().min(1).max(400).regex(/^[^0-9]*$/),
+      executionQuoteRef: z.string().min(1),
+      behavioralQuoteRef: z.string().min(1),
+    })).length(planDrift.length),
   }).parse(value);
   const byRef = new Map(quoteCatalog.map((quote) => [quote.quoteRef, quote]));
-  const sourceFor = (ref: string) => {
+  const sourceFor = (ref: string, path: string) => {
     const source = byRef.get(ref);
-    if (!source) throw new AIError("GROUNDING");
+    if (!source) groundingFailure("UNKNOWN_QUOTE_SELECTOR", path);
+    if (/^Self-assessment:\s*/i.test(source.quote)) {
+      groundingFailure("QUOTE_NOT_FROM_ALLOWED_SOURCE", path, [source.evidenceId]);
+    }
     return source;
   };
-  const refsFor = (keys: readonly string[]) => [...new Set(keys.map((key) => sourceFor(key).evidenceId))];
-  return autopsySchema.parse({ summary: wire.summary,
-    dimensions: wire.dimensions.map((dimension) => {
-      const observedFacts = dimension.observedFacts.map(({ quoteRef }) => {
-        const source = sourceFor(quoteRef);
+  const refsFor = (keys: readonly string[], path: string) => [...new Set(keys.map((key, k) => sourceFor(key, `${path}[${k}]`).evidenceId))];
+  const driftRoles = wire.planDriftLessons.map((entry, i) => {
+    const finding = planDrift[i];
+    const words = entry.text.normalize("NFKC");
+    if (
+      !/\b(?:target|take[ -]?profit)\b/i.test(words) ||
+      !/\b(?:chang(?:e[ds]?|ing)|shift(?:s|ed|ing)?|rais(?:e[ds]?|ing)|revis(?:e[ds]?|ing)|mov(?:e[ds]?|ing)|drift(?:s|ed|ing)?|increas(?:e[ds]?|ing))\b/i.test(words) ||
+      !/\b(?:sell(?:ing)?|exit(?:ing)?|execution)\b/i.test(words) ||
+      /\bpeak(?:ed)?\b/i.test(words)
+    ) {
+      groundingFailure("PLAN_DRIFT_LESSON_NOT_SPECIFIC", `planDriftLessons[${i}].text`, finding.evidenceRefs);
+    }
+    const executionSource = sourceFor(entry.executionQuoteRef, `planDriftLessons[${i}].executionQuoteRef`);
+    const behavioralSource = sourceFor(entry.behavioralQuoteRef, `planDriftLessons[${i}].behavioralQuoteRef`);
+    for (const [key, source] of [["executionQuoteRef", executionSource], ["behavioralQuoteRef", behavioralSource]] as const) {
+      if (
+        source.evidenceId !== finding.ordering.evidenceId ||
+        !(source.quote.includes(finding.ordering.quote) || source.quote.includes(finding.observedFacts[1].quote))
+      ) {
+        groundingFailure("PLAN_DRIFT_EVIDENCE_MISMATCH", `planDriftLessons[${i}].${key}`, [source.evidenceId]);
+      }
+    }
+    return { executionSource, behavioralSource };
+  });
+  const appendRoleFacts = (dimension: (typeof wire.dimensions)[number], observedFacts: { evidenceId: string; quote: string }[]) => {
+    if (dimension.score === null) return;
+    const selected =
+      dimension.dimension === "execution_quality"
+        ? driftRoles.map((role) => role.executionSource)
+        : dimension.dimension === "behavioral_control"
+          ? driftRoles.map((role) => role.behavioralSource)
+          : [];
+    for (const source of selected) {
+      if (!observedFacts.some((fact) => fact.evidenceId === source.evidenceId && fact.quote === source.quote)) {
+        observedFacts.push({ evidenceId: source.evidenceId, quote: source.quote });
+      }
+    }
+  };
+  return autopsySchema.parse({
+    summary: planDrift.length > 0
+      ? planDrift.map((finding) => finding.explanation).join(" ")
+      : "This review assesses the supplied process evidence. Missing execution information is not evidence of poor execution.",
+    dimensions: wire.dimensions.map((dimension, i) => {
+      const observedFacts = dimension.observedFacts.map(({ quoteRef }, j) => {
+        const source = sourceFor(quoteRef, `dimensions[${i}].observedFacts[${j}].quoteRef`);
         return { evidenceId: source.evidenceId, quote: source.quote };
       });
-      const inferredFindings = dimension.inferredFindings.map(({ finding, supportQuotes }) => ({ finding, evidenceRefs: refsFor(supportQuotes) }));
+      appendRoleFacts(dimension, observedFacts);
+      const inferredFindings = dimension.inferredFindings.map(({ finding, supportQuotes }, j) => ({ finding, evidenceRefs: refsFor(supportQuotes, `dimensions[${i}].inferredFindings[${j}].supportQuotes`) }));
       return { ...dimension, inferredFindings, observedFacts, evidenceRefs: [...new Set([...observedFacts.map((fact) => fact.evidenceId), ...inferredFindings.flatMap((finding) => finding.evidenceRefs)])] };
     }),
-    lessons: [...wire.lessons.map(({ text, supportQuotes }) => ({ text, evidenceRefs: refsFor(supportQuotes) })), ...wire.planDriftLessons.map(({ text }, index) => ({ text, evidenceRefs: [...planDrift[index].evidenceRefs] }))],
+    lessons: [...wire.lessons.map(({ text, supportQuotes }, i) => ({ text, evidenceRefs: refsFor(supportQuotes, `lessons[${i}].supportQuotes`) })), ...wire.planDriftLessons.map((entry, index) => {
+      const finding = planDrift[index];
+      const facts = [
+        `The remembered take-profit target was ${finding.originalPlan.value} USD market cap, and the user reported revising the expectation to ${finding.revisedPlan.value} USD while holding.`,
+        ...(finding.observations.peakMarketCap === null ? [] : [`Reported peak market-cap observation: ${finding.observations.peakMarketCap} USD.`]),
+        ...(finding.observations.exitMarketCap === null ? [] : [`Reported exit market-cap observation: ${finding.observations.exitMarketCap} USD.`]),
+      ].join(" ");
+      return {
+        text: `${facts} ${entry.text} These are retrospective market-cap observations, not verified fills or realized returns.`,
+        evidenceRefs: [...finding.evidenceRefs],
+      };
+    })],
+  });
+}
+
+const RISK_ADHERENCE_CLAIM =
+  /\b(?:not (?:applied|enforced|followed)|(?:rule|plan|stop|invalidation|limit) (?:was )?(?:ignored|breached|violated)|ignored (?:the |my |a )?(?:risk|stop|withdrawal|invalidation)|remained open despite adverse)/i;
+
+export function assertSparseRiskNarratives(
+  value: AutopsyResult,
+  catalogById: ReadonlyMap<string, { kind: string; text: string }>,
+): void {
+  value.dimensions.forEach((dimension, i) => {
+    if (dimension.dimension !== "risk_discipline") return;
+    const supportsAdherence = dimension.observedFacts.some((fact) => {
+      const source = catalogById.get(fact.evidenceId);
+      return (
+        source?.kind === "trade_data" &&
+        source.text.startsWith("phase: after_the_fact manual observations, not decision-time evidence") &&
+        source.text.includes(fact.quote) &&
+        RISK_ADHERENCE_CLAIM.test(fact.quote)
+      );
+    });
+    if (supportsAdherence) return;
+    if (RISK_ADHERENCE_CLAIM.test(dimension.explanation.normalize("NFKC"))) {
+      groundingFailure("UNSUPPORTED_RISK_ADHERENCE", `dimensions[${i}].explanation`, dimension.evidenceRefs);
+    }
+    dimension.inferredFindings.forEach((finding, j) => {
+      if (RISK_ADHERENCE_CLAIM.test(finding.finding.normalize("NFKC"))) {
+        groundingFailure("UNSUPPORTED_RISK_ADHERENCE", `dimensions[${i}].inferredFindings[${j}].finding`, dimension.evidenceRefs);
+      }
+    });
   });
 }
 
@@ -170,6 +306,17 @@ function metricProcessText(metrics: Record<string, unknown>, sparse: boolean): s
     lines.push(`${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`);
   }
   return lines.join("\n");
+}
+
+function metricNormalizedFact(metrics: Record<string, unknown>, sparse: boolean): Record<string, unknown> {
+  const fact: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metrics)) {
+    if (OUTCOME_FIELDS.has(key) || PNL_WORDS.test(key)) continue;
+    if (sparse && SPARSE_OUTCOME_FIELDS.has(key)) continue;
+    if (value === null || key === "version") continue;
+    fact[key] = value;
+  }
+  return fact;
 }
 
 function sparseObservationsText(observations: Row): string {
@@ -217,7 +364,6 @@ function snapshotText(snapshot: Row): string {
     const value = snapshot[key];
     if (typeof value === "string" && value.length > 0) lines.push(`${key}: ${value}`);
   }
-  if (Array.isArray(snapshot.origins)) lines.push(`origins: ${snapshot.origins.join("|")}`);
   return lines.join("\n");
 }
 
@@ -314,10 +460,10 @@ function strOrNull(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function validateAutopsy(value: AutopsyResult, catalogById: Map<string, CatalogEntry>): void {
+export function validateAutopsy(value: AutopsyResult, catalogById: Map<string, CatalogEntry>): void {
   const seen = new Set<string>();
-  for (const dimension of value.dimensions) {
-    if (seen.has(dimension.dimension)) throw new AIError("GROUNDING");
+  value.dimensions.forEach((dimension, i) => {
+    if (seen.has(dimension.dimension)) groundingFailure("DUPLICATE_OR_CONTRADICTORY_EVIDENCE", `dimensions[${i}].dimension`);
     seen.add(dimension.dimension);
     const refs = new Set(dimension.evidenceRefs);
     if (dimension.score === null) {
@@ -327,41 +473,41 @@ function validateAutopsy(value: AutopsyResult, catalogById: Map<string, CatalogE
         dimension.observedFacts.length > 0 ||
         dimension.inferredFindings.length > 0
       ) {
-        throw new AIError("GROUNDING");
+        groundingFailure("UNASSESSED_DIMENSION_HAS_EVIDENCE", `dimensions[${i}]`);
       }
     } else if (dimension.evidenceRefs.length === 0 || dimension.observedFacts.length === 0) {
-      throw new AIError("GROUNDING");
+      groundingFailure("OBSERVED_FACT_UNSUPPORTED", `dimensions[${i}].observedFacts`);
     }
-    for (const ref of dimension.evidenceRefs) {
-      if (!catalogById.has(ref)) throw new AIError("GROUNDING");
-    }
-    for (const fact of dimension.observedFacts) {
-      if (!refs.has(fact.evidenceId)) throw new AIError("GROUNDING");
+    dimension.evidenceRefs.forEach((ref, j) => {
+      if (!catalogById.has(ref)) groundingFailure("UNKNOWN_EVIDENCE_ID", `dimensions[${i}].evidenceRefs[${j}]`, [ref]);
+    });
+    dimension.observedFacts.forEach((fact, j) => {
+      if (!refs.has(fact.evidenceId)) groundingFailure("OBSERVED_FACT_UNSUPPORTED", `dimensions[${i}].observedFacts[${j}].evidenceId`, [fact.evidenceId]);
       const entry = catalogById.get(fact.evidenceId);
-      if (!entry || !entry.text.includes(fact.quote)) throw new AIError("GROUNDING");
-    }
-    for (const finding of dimension.inferredFindings) {
-      if (finding.evidenceRefs.length === 0) throw new AIError("GROUNDING");
-      for (const ref of finding.evidenceRefs) {
-        if (!refs.has(ref)) throw new AIError("GROUNDING");
-      }
-    }
-    if (CLINICAL_PATTERN.test(dimension.explanation)) throw new AIError("GROUNDING");
-    for (const finding of dimension.inferredFindings) {
-      if (CLINICAL_PATTERN.test(finding.finding)) throw new AIError("GROUNDING");
-    }
-  }
+      if (!entry || !entry.text.includes(fact.quote)) groundingFailure("QUOTE_NOT_EXACT", `dimensions[${i}].observedFacts[${j}].quote`, [fact.evidenceId]);
+    });
+    dimension.inferredFindings.forEach((finding, j) => {
+      if (finding.evidenceRefs.length === 0) groundingFailure("INFERENCE_MISSING_EVIDENCE", `dimensions[${i}].inferredFindings[${j}].evidenceRefs`);
+      finding.evidenceRefs.forEach((ref, k) => {
+        if (!refs.has(ref)) groundingFailure("INFERENCE_MISSING_EVIDENCE", `dimensions[${i}].inferredFindings[${j}].evidenceRefs[${k}]`, [ref]);
+      });
+    });
+    if (CLINICAL_PATTERN.test(dimension.explanation)) groundingFailure("CLINICAL_CLAIM", `dimensions[${i}].explanation`);
+    dimension.inferredFindings.forEach((finding, j) => {
+      if (CLINICAL_PATTERN.test(finding.finding)) groundingFailure("CLINICAL_CLAIM", `dimensions[${i}].inferredFindings[${j}].finding`);
+    });
+  });
   for (const dimension of REVIEW_DIMENSIONS) {
-    if (!seen.has(dimension)) throw new AIError("GROUNDING");
+    if (!seen.has(dimension)) groundingFailure("MISSING_DIMENSION", "dimensions");
   }
-  if (CLINICAL_PATTERN.test(value.summary)) throw new AIError("GROUNDING");
-  for (const lesson of value.lessons) {
-    if (lesson.evidenceRefs.length === 0) throw new AIError("GROUNDING");
-    for (const ref of lesson.evidenceRefs) {
-      if (!catalogById.has(ref)) throw new AIError("GROUNDING");
-    }
-    if (CLINICAL_PATTERN.test(lesson.text)) throw new AIError("GROUNDING");
-  }
+  if (CLINICAL_PATTERN.test(value.summary)) groundingFailure("CLINICAL_CLAIM", "summary");
+  value.lessons.forEach((lesson, i) => {
+    if (lesson.evidenceRefs.length === 0) groundingFailure("INFERENCE_MISSING_EVIDENCE", `lessons[${i}].evidenceRefs`);
+    lesson.evidenceRefs.forEach((ref, j) => {
+      if (!catalogById.has(ref)) groundingFailure("UNKNOWN_EVIDENCE_ID", `lessons[${i}].evidenceRefs[${j}]`, [ref]);
+    });
+    if (CLINICAL_PATTERN.test(lesson.text)) groundingFailure("CLINICAL_CLAIM", `lessons[${i}].text`);
+  });
 }
 
 export async function generateReview(
@@ -468,6 +614,10 @@ export async function generateReview(
 
   const observedAt = isoOf(observedTimestamp ?? provenance.receivedAt ?? trade.created_at);
   const decisionCreatedAt = isoOf(decision.created_at ?? decision.confirmed_at);
+  const recollected =
+    snapshot.knowledgeBasis === "retrospective_recollection" || metrics.captureTiming === "retrospective";
+  const decisionBasis = recollected ? ("recollected_decision" as const) : ("decision_time_user_report" as const);
+  const decisionTiming = recollected ? ("retrospective_recollection" as const) : ("decision_time_reported" as const);
 
   const catalog: CatalogEntry[] = [];
   catalog.push({
@@ -483,6 +633,9 @@ export async function generateReview(
     ),
     kind: "user_input",
     text: `decision raw input:\n${String(decision.raw_input)}`,
+    sourceEntityId: String(decision.id),
+    knowledgeBasis: decisionBasis,
+    timing: decisionTiming,
   });
   catalog.push({
     id: String(
@@ -497,6 +650,9 @@ export async function generateReview(
     ),
     kind: "user_input",
     text: `original confirmed decision snapshot:\n${snapshotText(snapshot)}`,
+    sourceEntityId: String(decision.id),
+    knowledgeBasis: decisionBasis,
+    timing: decisionTiming,
   });
   for (const origin of bundle.origins) {
     if (origin.basis !== "user_confirmed") continue;
@@ -513,6 +669,9 @@ export async function generateReview(
       ),
       kind: "user_input",
       text: originText(origin),
+      sourceEntityId: String(decision.id),
+      knowledgeBasis: decisionBasis,
+      timing: decisionTiming,
     });
   }
   const tradeSummaryEvidence =
@@ -529,6 +688,9 @@ export async function generateReview(
     id: String(tradeSummaryEvidence.id),
     kind: "trade_data",
     text: tradeProcessText(trade),
+    sourceEntityId: String(trade.id),
+    knowledgeBasis: "reported_execution",
+    timing: "execution_time_unknown",
   });
   if (isSparse) {
     catalog.push({
@@ -544,6 +706,9 @@ export async function generateReview(
       ),
       kind: "trade_data",
       text: sparseObservationsText(observations),
+      sourceEntityId: String(trade.id),
+      knowledgeBasis: "retrospective_execution",
+      timing: "execution_time_unknown",
     });
   }
   catalog.push({
@@ -559,6 +724,10 @@ export async function generateReview(
     ),
     kind: "trade_data",
     text: metricProcessText(metrics as Record<string, unknown>, isSparse),
+    sourceEntityId: String(trade.id),
+    knowledgeBasis: "deterministic_derived",
+    timing: "derived_from_owned_evidence",
+    normalizedFact: metricNormalizedFact(metrics as Record<string, unknown>, isSparse),
   });
   for (const source of bundle.sources) {
     const existing = bundle.evidence.find(
@@ -572,7 +741,14 @@ export async function generateReview(
         label: `Source: ${String(source.label ?? source.source_type)}`,
         observedAt: isoOf(source.created_at ?? decisionCreatedAt),
       }));
-    catalog.push({ id: String(row.id), kind: "source", text: sourceText(source) });
+    catalog.push({
+      id: String(row.id),
+      kind: "source",
+      text: sourceText(source),
+      sourceEntityId: String(source.id),
+      knowledgeBasis: "decision_source",
+      timing: decisionTiming,
+    });
   }
   for (const context of bundle.contexts) {
     const existing = bundle.evidence.find(
@@ -586,27 +762,73 @@ export async function generateReview(
         label: "Market context snapshot",
         observedAt: isoOf(context.captured_at),
       }));
-    catalog.push({ id: String(row.id), kind: "market_data", text: contextText(context) });
+    catalog.push({
+      id: String(row.id),
+      kind: "market_data",
+      text: contextText(context),
+      sourceEntityId: String(context.id),
+      knowledgeBasis: "verified_decision_time_context",
+      timing: "verified_decision_time",
+    });
   }
   assertCatalogSize(catalog);
   const catalogById = new Map(catalog.map((entry) => [entry.id, entry]));
   const allowedEvidenceIds = catalog.map((entry) => entry.id);
   const planDrift = isSparse ? detectTargetDrift(snapshot, observations, catalog) : [];
   const grounded = isSparse ? groundedAutopsySchema(catalog, planDrift) : null;
+  const evidenceLedger = grounded
+    ? catalog.map((entry) => ({
+        evidenceId: entry.id,
+        evidenceType: entry.kind,
+        knowledgeBasis: entry.knowledgeBasis,
+        sourceEntityId: entry.sourceEntityId,
+        timing: entry.timing,
+        quotes: grounded.quoteCatalog
+          .filter((quote) => quote.evidenceId === entry.id)
+          .map(({ quoteRef, quote }) => ({
+            quoteRef,
+            quote,
+            claimType: /^Self-assessment:\s*/i.test(quote)
+              ? "user_retrospective_self_assessment"
+              : entry.knowledgeBasis === "deterministic_derived"
+                ? "deterministic_fact"
+                : "source_excerpt",
+          })),
+        ...(entry.normalizedFact ? { normalizedFact: entry.normalizedFact } : {}),
+      }))
+    : null;
 
   const result = await llm.generateStructured<unknown>({
     system: isSparse ? SPARSE_AUTOPSY_SYSTEM_PROMPT : AUTOPSY_SYSTEM_PROMPT,
     input: JSON.stringify({
-      decisionSnapshot: snapshot,
       captureTiming: metrics.captureTiming,
       verifiedDecisionTimeContextAvailable: bundle.contexts.length > 0,
-      evidenceCatalog: grounded ? catalog.map(({ id, kind }) => ({ id, kind })) : catalog,
-      ...(grounded ? { quoteCatalog: grounded.quoteCatalog } : {}),
-      planDrift: grounded ? planDrift.map((finding) => ({
-        ...finding,
-        behaviorQuoteRefs: grounded.quoteCatalog.filter((quote) => quote.evidenceId === finding.ordering.evidenceId && [finding.ordering.quote, finding.observedFacts[1].quote].some((statement) => quote.quote.includes(statement))).map((quote) => quote.quoteRef),
-        originalTargetQuoteRef: grounded.quoteCatalog.find((quote) => quote.evidenceId === finding.observedFacts[0].evidenceId && quote.quote.includes(finding.observedFacts[0].quote))?.quoteRef ?? null,
-      })) : planDrift,
+      ...(grounded
+        ? {
+            evidenceLedger: (evidenceLedger ?? []).map((entry) => ({
+              ...entry,
+              quotes: entry.quotes.filter((quote) => quote.claimType !== "user_retrospective_self_assessment"),
+            })),
+            unavailable: {
+              actualProceeds: observations.proceedsReceived == null,
+              realizedPnl: (metrics as Record<string, unknown>).netRealizedPnl == null,
+              unitPrices: trade.entry_price == null || trade.exit_price == null,
+              executionTimestamps: trade.opened_at == null || trade.closed_at == null,
+              verifiedDecisionTimeContext: bundle.contexts.length === 0,
+            },
+          }
+        : {
+            decisionSnapshot: snapshot,
+            evidenceCatalog: catalog,
+          }),
+      planDrift: grounded ? planDrift.map((finding) => {
+        return {
+          ...finding,
+          userSelfAssessment: undefined,
+          behaviorQuoteRefs: grounded.quoteCatalog.filter((quote) => quote.evidenceId === finding.ordering.evidenceId && [finding.ordering.quote, finding.observedFacts[1].quote].some((statement) => quote.quote.includes(statement))).map((quote) => quote.quoteRef),
+          originalTargetQuoteRef: grounded.quoteCatalog.find((quote) => quote.evidenceId === finding.observedFacts[0].evidenceId && quote.quote.includes(finding.observedFacts[0].quote))?.quoteRef ?? null,
+        };
+      }) : planDrift,
     }),
     pipeline: "decision-autopsy",
     promptVersion: isSparse ? SPARSE_AUTOPSY_PROMPT_VERSION : REVIEW_PROMPT_VERSION,
@@ -618,7 +840,10 @@ export async function generateReview(
       const value = grounded ? resolveAutopsyQuotes(wireValue, grounded.quoteCatalog, planDrift) : autopsySchema.parse(wireValue);
       validateAutopsy(value, catalogById);
       if (isSparse) {
-        if (bundle.contexts.length === 0 && value.dimensions.some((dimension) => dimension.dimension === "context_awareness" && dimension.score !== null)) throw new AIError("GROUNDING");
+        if (bundle.contexts.length === 0) value.dimensions.forEach((dimension, i) => {
+          if (dimension.dimension === "context_awareness" && dimension.score !== null) groundingFailure("DECISION_TIME_CONTEXT_UNAVAILABLE", `dimensions[${i}].score`);
+        });
+        assertSparseRiskNarratives(value, catalogById);
         assertSpecificDriftLessons(value.lessons, planDrift);
         assertDriftNarratives(value, planDrift);
       }
@@ -655,6 +880,9 @@ export async function generateReview(
     },
     snapshotBasis: "original_confirmed",
     observationBasis: isSparse ? "server_catalog_quotes_selected_by_model" : "model_verbatim_quotes",
+    summaryBasis: isSparse ? "server_derived_evidence_synopsis" : "model_grounded_narrative",
+    lessonBasis: isSparse ? "server_facts_plus_model_process_takeaway" : "model_grounded_narrative",
+    ...(isSparse ? { evidenceLedger } : {}),
   };
 
   let persisted: { review: Row; dimensions: Row[] };
@@ -785,6 +1013,8 @@ export async function getReview(
     decisionQuality: metrics.decisionQuality ?? null,
     ai: isRecord(inference.ai) ? inference.ai : null,
     observationBasis: inference.observationBasis ?? null,
+    summaryBasis: inference.summaryBasis ?? null,
+    lessonBasis: inference.lessonBasis ?? null,
     summary: inference.summary ?? null,
     lessons: inference.lessons ?? [],
     evidence,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AIError } from "../ai/errors";
+import { groundingFailure } from "../ai/errors";
 import { decimalUnits, formatDecimal } from "../review-policy";
 
 export type PlanDriftType = "target_drift" | "risk_drift" | "thesis_drift" | "invalidation_drift" | "time_horizon_drift";
@@ -48,29 +48,62 @@ export function mentionsCapValue(text: string, value: string): boolean {
 }
 
 export function assertSpecificDriftLessons(lessons: readonly { text: string; evidenceRefs: readonly string[] }[], findings: readonly TargetDriftFinding[]): void {
-  if (lessons.some((lesson) => /^(?:stick to (?:your|the) plan|do more research|control greed|don['’]t be greedy|do not be greedy)[.!?\s]*$/i.test(lesson.text.trim()))) throw new AIError("GROUNDING");
-  for (const finding of findings) {
-    if (!lessons.some((lesson) => finding.evidenceRefs.every((id) => lesson.evidenceRefs.includes(id)) && /\b(?:target|take[ -]?profit)\b/i.test(narrativeWords(lesson.text)) && /\b(?:changed?|shifted?|raised?|revised?|drift|increase[ds]?|from|towards?)\b/i.test(narrativeWords(lesson.text)) && mentionsCapValue(lesson.text, finding.originalPlan.value) && mentionsCapValue(lesson.text, finding.revisedPlan.value))) throw new AIError("GROUNDING");
-  }
+  lessons.forEach((lesson, i) => {
+    if (/^(?:stick to (?:your|the) plan|do more research|control greed|don['’]t be greedy|do not be greedy)[.!?\s]*$/i.test(lesson.text.trim())) groundingFailure("GENERIC_LESSON", `lessons[${i}].text`);
+  });
+  findings.forEach((finding, i) => {
+    if (!lessons.some((lesson) => finding.evidenceRefs.every((id) => lesson.evidenceRefs.includes(id)) && /\b(?:target|take[ -]?profit)\b/i.test(narrativeWords(lesson.text)) && /\b(?:chang(?:e[ds]?|ing)|shift(?:s|ed|ing)?|rais(?:e[ds]?|ing)|revis(?:e[ds]?|ing)|mov(?:e[ds]?|ing)|drift(?:s|ed|ing)?|increas(?:e[ds]?|ing)|from|towards?)\b/i.test(narrativeWords(lesson.text)) && mentionsCapValue(lesson.text, finding.originalPlan.value) && mentionsCapValue(lesson.text, finding.revisedPlan.value))) groundingFailure("PLAN_DRIFT_LESSON_NOT_SPECIFIC", `planDriftLessons[${i}].text`, finding.evidenceRefs);
+  });
 }
 
 export function assertDriftNarratives(
   value: { summary: string; lessons: { text: string }[]; dimensions: { dimension: string; score: number | null; explanation: string; observedFacts: { evidenceId: string; quote: string }[]; inferredFindings: { finding: string }[] }[] },
   findings: readonly TargetDriftFinding[],
 ): void {
-  const texts = [value.summary, ...value.lessons.map((lesson) => lesson.text), ...value.dimensions.flatMap((dimension) => [dimension.explanation, ...dimension.inferredFindings.map((finding) => finding.finding)])];
-  for (const text of texts) {
+  const originalLevelClaim = /\b(?:did not|didn['’]t|failed to|chose not to)\s+(?:sell|exit)\s+at\s+(?:the\s+)?original\b/i;
+  const supportsOriginalLevel = findings.some((finding) =>
+    [finding.ordering.quote, ...finding.observedFacts.map((fact) => fact.quote)].some((quote) =>
+      originalLevelClaim.test(narrativeWords(quote)),
+    ),
+  );
+  const peakChronology = /\b(?:before|after)\b.{0,60}\bpeak(?:ed)?\b/i;
+  const supportsPeakChronology = findings.some((finding) =>
+    [finding.ordering.quote, ...finding.observedFacts.map((fact) => fact.quote)].some((quote) =>
+      peakChronology.test(narrativeWords(quote)),
+    ),
+  );
+  const guard = (text: string, path: string) => {
     for (const sentence of narrativeWords(text).split(/(?<=[.!?])\s+/)) {
-      if (/\bgreed(?:y)?\b/i.test(sentence) && !(/\b(?:retrospectively|retrospective|self[ -]reported|self[ -]assessment)\b/i.test(sentence) && /\b(?:attribut(?:ed|es|ing|ion)|report(?:ed|s|ing)?|thought|thinks|interpretation|assessment|self-assessed|described|said|stated)\b/i.test(sentence))) throw new AIError("GROUNDING");
-      if (/\b(?:money left on the table|realized (?:profit|loss|returns?)|investment (?:performance|returns?)|financial (?:loss|gain)|cost of (?:target|plan) drift)\b/i.test(sentence) && !/\b(?:not|unknown|unavailable|cannot|never|no evidence|does not|don['’]t)\b/i.test(sentence)) throw new AIError("GROUNDING");
+      if (/\bq\d+\b/i.test(sentence)) groundingFailure("INTERNAL_SELECTOR_IN_NARRATIVE", path);
+      if (/\b(?:optimism(?: bias)?|overconfidence)\b/i.test(sentence)) groundingFailure("UNSUPPORTED_MOTIVE_CLAIM", path);
+      if (/\bgreed(?:y)?\b/i.test(sentence) && !(/\b(?:retrospectively|retrospective|self[ -]reported|self[ -]assessment)\b/i.test(sentence) && /\b(?:attribut(?:ed|es|ing|ion)|report(?:ed|s|ing)?|thought|thinks|interpretation|assessment|self-assessed|described|said|stated)\b/i.test(sentence))) groundingFailure("RETROSPECTIVE_ATTRIBUTION_REQUIRED", path);
+      if (/\b(?:money left on the table|realized (?:profit|loss|returns?)|investment (?:performance|returns?)|financial (?:loss|gain)|cost of (?:target|plan) drift|suboptimal exit)\b/i.test(sentence) && !/\b(?:not|unknown|unavailable|cannot|never|no evidence|does not|don['’]t)\b/i.test(sentence)) groundingFailure("UNSUPPORTED_FINANCIAL_CLAIM", path);
+      if (findings.length > 0 && originalLevelClaim.test(sentence) && !supportsOriginalLevel) {
+        groundingFailure("UNSUPPORTED_EXECUTION_CLAIM", path, findings[0].evidenceRefs);
+      }
+      if (findings.length > 0 && peakChronology.test(sentence) && !supportsPeakChronology) {
+        groundingFailure("UNSUPPORTED_EXECUTION_CLAIM", path, findings[0].evidenceRefs);
+      }
     }
-  }
+  };
+  guard(value.summary, "summary");
+  value.lessons.forEach((lesson, i) => guard(lesson.text, `lessons[${i}].text`));
+  value.dimensions.forEach((dimension, i) => {
+    guard(dimension.explanation, `dimensions[${i}].explanation`);
+    dimension.inferredFindings.forEach((finding, j) => guard(finding.finding, `dimensions[${i}].inferredFindings[${j}].finding`));
+  });
   for (const finding of findings) {
-    for (const dimension of value.dimensions) {
-      if (dimension.score === null || !["execution_quality", "behavioral_control"].includes(dimension.dimension)) continue;
+    value.dimensions.forEach((dimension, i) => {
+      if (dimension.score === null || !["execution_quality", "behavioral_control"].includes(dimension.dimension)) return;
       const behaviorQuotes = [finding.ordering.quote, finding.observedFacts[1].quote];
-      if (!dimension.observedFacts.some((fact) => fact.evidenceId === finding.ordering.evidenceId && behaviorQuotes.some((quote) => fact.quote.includes(quote)))) throw new AIError("GROUNDING");
-    }
+      if (!dimension.observedFacts.some((fact) => fact.evidenceId === finding.ordering.evidenceId && behaviorQuotes.some((quote) => fact.quote.includes(quote)))) groundingFailure("PLAN_DRIFT_EVIDENCE_MISMATCH", `dimensions[${i}].observedFacts`, finding.evidenceRefs);
+      if (dimension.dimension === "execution_quality") {
+        const explanation = narrativeWords(dimension.explanation);
+        if (!/\b(?:target|take[ -]?profit)\b/i.test(explanation) || !/\b(?:chang(?:e[ds]?|ing)|shift(?:s|ed|ing)?|rais(?:e[ds]?|ing)|revis(?:e[ds]?|ing)|mov(?:e[ds]?|ing)|drift(?:s|ed|ing)?|increas(?:e[ds]?|ing))\b/i.test(explanation)) {
+          groundingFailure("PLAN_DRIFT_EVIDENCE_MISMATCH", `dimensions[${i}].explanation`, finding.evidenceRefs);
+        }
+      }
+    });
   }
 }
 

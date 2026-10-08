@@ -234,22 +234,34 @@ test("unknown peak or exit leaves those drift metrics null", () => {
 
 test("generic lessons are rejected; drift lessons need both refs and both caps", () => {
   const findings = detect();
-  assert.throws(
+  const fails = (fn: () => void, reason: string, path: string) =>
+    assert.throws(
+      fn,
+      (e) =>
+        e instanceof AIError &&
+        e.code === "GROUNDING" &&
+        e.grounding?.reason === reason &&
+        e.grounding.path === path,
+    );
+  fails(
     () => assertSpecificDriftLessons([{ text: "Stick to your plan.", evidenceRefs: [ID_SNAPSHOT, ID_OBSERVATIONS] }], findings),
-    (e) => e instanceof AIError && e.code === "GROUNDING",
+    "GENERIC_LESSON",
+    "lessons[0].text",
   );
-  assert.throws(
+  fails(
     () => assertSpecificDriftLessons([{ text: "Do more research.", evidenceRefs: [ID_SNAPSHOT] }], findings),
-    (e) => e instanceof AIError && e.code === "GROUNDING",
+    "GENERIC_LESSON",
+    "lessons[0].text",
   );
-  assert.throws(
+  fails(
     () => assertSpecificDriftLessons([{ text: "The reported target shifted from $1M to $2M while the user did not sell.", evidenceRefs: [ID_SNAPSHOT] }], findings),
-    (e) => e instanceof AIError && e.code === "GROUNDING",
-    "missing the second evidence ref must fail",
+    "PLAN_DRIFT_LESSON_NOT_SPECIFIC",
+    "planDriftLessons[0].text",
   );
-  assert.throws(
+  fails(
     () => assertSpecificDriftLessons([{ text: "The plan changed over time.", evidenceRefs: [ID_SNAPSHOT, ID_OBSERVATIONS] }], findings),
-    (e) => e instanceof AIError && e.code === "GROUNDING",
+    "PLAN_DRIFT_LESSON_NOT_SPECIFIC",
+    "planDriftLessons[0].text",
   );
   assertSpecificDriftLessons(
     [{ text: "The reported target shifted from $1M to $2M while the user did not sell.", evidenceRefs: [ID_SNAPSHOT, ID_OBSERVATIONS] }],
@@ -281,24 +293,115 @@ function narrativeValue(texts: { summary?: string; lessons?: string[] }, dimensi
 
 test("drift narratives require attributed retrospection and deny unsupported financial cost", () => {
   const findings = detect();
-  const rejects = (value: Parameters<typeof assertDriftNarratives>[0]) =>
+  const rejects = (value: Parameters<typeof assertDriftNarratives>[0], reason: string, path: string) =>
     assert.throws(
       () => assertDriftNarratives(value, findings),
-      (error) => error instanceof AIError && error.code === "GROUNDING",
+      (error) =>
+        error instanceof AIError &&
+        error.code === "GROUNDING" &&
+        error.grounding?.reason === reason &&
+        error.grounding.path === path,
     );
-  rejects(narrativeValue({ summary: "Greed caused the change." }));
-  rejects(narrativeValue({ summary: "Reflex diagnosed greedy trading." }));
-  rejects(narrativeValue({ summary: "This illustrates the cost of target drift." }));
-  rejects(narrativeValue({ lessons: ["Greed caused the change."] }));
+  rejects(narrativeValue({ summary: "Greed caused the change." }), "RETROSPECTIVE_ATTRIBUTION_REQUIRED", "summary");
+  rejects(narrativeValue({ summary: "Reflex diagnosed greedy trading." }), "RETROSPECTIVE_ATTRIBUTION_REQUIRED", "summary");
+  rejects(narrativeValue({ summary: "This illustrates the cost of target drift." }), "UNSUPPORTED_FINANCIAL_CLAIM", "summary");
+  rejects(narrativeValue({ lessons: ["Greed caused the change."] }), "RETROSPECTIVE_ATTRIBUTION_REQUIRED", "lessons[0].text");
+  rejects(narrativeValue({ lessons: ["The change is shown by q35."] }), "INTERNAL_SELECTOR_IN_NARRATIVE", "lessons[0].text");
+  rejects(
+    narrativeValue(
+      {},
+      narrativeDimensions({ execution_quality: { explanation: "The drift appears at q36." } }),
+    ),
+    "INTERNAL_SELECTOR_IN_NARRATIVE",
+    "dimensions[3].explanation",
+  );
   rejects(
     narrativeValue(
       {},
       narrativeDimensions({ risk_discipline: { inferredFindings: [{ finding: "Greed caused the change." }] } }),
     ),
+    "RETROSPECTIVE_ATTRIBUTION_REQUIRED",
+    "dimensions[2].inferredFindings[0].finding",
   );
   assertDriftNarratives(narrativeValue({ summary: "The user retrospectively attributed the change partly to greed." }), findings);
   assertDriftNarratives(narrativeValue({ summary: "Market-cap movement does not establish realized return." }), findings);
+  rejects(
+    narrativeValue(
+      {},
+      narrativeDimensions({
+        behavioral_control: {
+          explanation: "Behavior reflected optimism bias, moving the profit target higher despite a market peak, leading to a suboptimal exit.",
+        },
+      }),
+    ),
+    "UNSUPPORTED_MOTIVE_CLAIM",
+    "dimensions[4].explanation",
+  );
+  rejects(
+    narrativeValue(
+      {},
+      narrativeDimensions({
+        behavioral_control: { inferredFindings: [{ finding: "Behavioral optimism caused target drift." }] },
+      }),
+    ),
+    "UNSUPPORTED_MOTIVE_CLAIM",
+    "dimensions[4].inferredFindings[0].finding",
+  );
+  rejects(
+    narrativeValue({}, narrativeDimensions({ execution_quality: { explanation: "The result was a suboptimal exit." } })),
+    "UNSUPPORTED_FINANCIAL_CLAIM",
+    "dimensions[3].explanation",
+  );
+  rejects(
+    narrativeValue({ lessons: ["The user did not sell at the original target."] }),
+    "UNSUPPORTED_EXECUTION_CLAIM",
+    "lessons[0].text",
+  );
+  rejects(
+    narrativeValue(
+      {},
+      narrativeDimensions({ execution_quality: { explanation: "The user failed to exit at the original target level." } }),
+    ),
+    "UNSUPPORTED_EXECUTION_CLAIM",
+    "dimensions[3].explanation",
+  );
+  rejects(
+    narrativeValue({ lessons: ["The revision was reported before the token peaked."] }),
+    "UNSUPPORTED_EXECUTION_CLAIM",
+    "lessons[0].text",
+  );
+  rejects(
+    narrativeValue(
+      {},
+      narrativeDimensions({ behavioral_control: { explanation: "The user held the position until after the market cap peaked." } }),
+    ),
+    "UNSUPPORTED_EXECUTION_CLAIM",
+    "dimensions[4].explanation",
+  );
   assertDriftNarratives(narrativeValue({ summary: "The user's retrospective attribution of the change to greed." }), findings);
+  assertDriftNarratives(
+    narrativeValue(
+      {},
+      narrativeDimensions({ execution_quality: { explanation: "The exit is a lower market-cap observation, not financial performance." } }),
+    ),
+    findings,
+  );
+  const supportedFindings = detect().map((finding) => ({
+    ...finding,
+    ordering: { ...finding.ordering, quote: "What happened: I did not sell at the original target." },
+  }));
+  assertDriftNarratives(
+    narrativeValue({ lessons: ["The user did not sell at the original target."] }),
+    supportedFindings,
+  );
+  const chronologyFindings = detect().map((finding) => ({
+    ...finding,
+    ordering: { ...finding.ordering, quote: "What happened: I did not sell after the token peaked at $1.6M." },
+  }));
+  assertDriftNarratives(
+    narrativeValue({ lessons: ["The user reported not selling after the token peaked."] }),
+    chronologyFindings,
+  );
   assertDriftNarratives(
     narrativeValue({ summary: "The user retrospectively self‑reported greed." }),
     findings,
@@ -309,6 +412,24 @@ test("specific drift lesson matching survives typographic dashes without mutatin
   const findings = detect();
   const lesson = { text: "The take‑profit shifted from $1M to $2M while the user did not sell.", evidenceRefs: [ID_SNAPSHOT, ID_OBSERVATIONS] };
   assertSpecificDriftLessons([lesson], findings);
+  const moving = { text: "The original target was $1M; the user reported moving the target to $2M while not selling at the reported $1.6M peak.", evidenceRefs: [ID_SNAPSHOT, ID_OBSERVATIONS] };
+  assertSpecificDriftLessons([moving], findings);
+  assertSpecificDriftLessons([{ text: "The user moved the take-profit from the original $1M target toward $2M.", evidenceRefs: [ID_SNAPSHOT, ID_OBSERVATIONS] }], findings);
+  assertSpecificDriftLessons([{ text: "The take-profit moves from $1M to $2M in the user's retrospective account.", evidenceRefs: [ID_SNAPSHOT, ID_OBSERVATIONS] }], findings);
+  for (const verb of ["revising", "changing", "raising", "increasing", "shifting"]) {
+    assertSpecificDriftLessons(
+      [{ text: `The user reported ${verb} the take-profit target from $1M to $2M while not selling.`, evidenceRefs: [ID_SNAPSHOT, ID_OBSERVATIONS] }],
+      findings,
+    );
+  }
+  const notSpecific = (text: string, evidenceRefs: string[]) =>
+    assert.throws(
+      () => assertSpecificDriftLessons([{ text, evidenceRefs }], findings),
+      (e) => e instanceof AIError && e.code === "GROUNDING" && e.grounding?.reason === "PLAN_DRIFT_LESSON_NOT_SPECIFIC" && e.grounding.path === "planDriftLessons[0].text",
+    );
+  notSpecific("The original target was $1M; the user reported moving the target while not selling at the reported $1.6M peak.", [ID_SNAPSHOT, ID_OBSERVATIONS]);
+  notSpecific("The user reported moving the target to $2M while not selling at the reported $1.6M peak.", [ID_SNAPSHOT, ID_OBSERVATIONS]);
+  notSpecific("The original target was $1M; the user reported moving the target to $2M while not selling at the reported $1.6M peak.", [ID_SNAPSHOT]);
   assert.ok(lesson.text.includes("‑"), "the original typographic dash is preserved");
   assert.throws(
     () =>
@@ -322,14 +443,29 @@ test("specific drift lesson matching survives typographic dashes without mutatin
 
 test("scored execution and behavioral dimensions must quote the drift behavior clause", () => {
   const findings = detect();
-  const scored = (dimension: string, quote: string) =>
+  const scored = (dimension: string, quote: string, explanation?: string) =>
     narrativeDimensions({
       [dimension]: {
         score: 40,
+        explanation: explanation ?? "The user reported the target changed from $1M to $2M and they did not sell at the reported peak.",
         observedFacts: [{ evidenceId: ID_OBSERVATIONS, quote }],
       },
     });
   assertDriftNarratives(narrativeValue({}, scored("execution_quality", ORDERING_QUOTE)), findings);
+  assertDriftNarratives(
+    narrativeValue(
+      {},
+      scored("execution_quality", ORDERING_QUOTE, "The user reported moving the take-profit target from $1M to $2M and staying in the trade."),
+    ),
+    findings,
+  );
+  assertDriftNarratives(
+    narrativeValue(
+      {},
+      scored("execution_quality", ORDERING_QUOTE, "The user did not sell at the reported $1.6M peak while the target moved from $1M to $2M."),
+    ),
+    findings,
+  );
   assertDriftNarratives(narrativeValue({}, scored("behavioral_control", CHANGE_QUOTE)), findings);
   assert.throws(
     () =>
@@ -337,7 +473,12 @@ test("scored execution and behavioral dimensions must quote the drift behavior c
         narrativeValue({}, scored("execution_quality", "Eventual exit: I eventually sold around $585k market cap.")),
         findings,
       ),
-    (error) => error instanceof AIError && error.code === "GROUNDING",
+    (error) =>
+      error instanceof AIError &&
+      error.code === "GROUNDING" &&
+      error.grounding?.reason === "PLAN_DRIFT_EVIDENCE_MISMATCH" &&
+      error.grounding.path === "dimensions[3].observedFacts" &&
+      error.grounding.evidenceIds?.length === 2,
   );
   assert.throws(
     () =>
@@ -348,7 +489,11 @@ test("scored execution and behavioral dimensions must quote the drift behavior c
         ),
         findings,
       ),
-    (error) => error instanceof AIError && error.code === "GROUNDING",
+    (error) =>
+      error instanceof AIError &&
+      error.code === "GROUNDING" &&
+      error.grounding?.reason === "PLAN_DRIFT_EVIDENCE_MISMATCH" &&
+      error.grounding.path === "dimensions[4].observedFacts",
   );
   assertDriftNarratives(
     narrativeValue(
@@ -358,6 +503,103 @@ test("scored execution and behavioral dimensions must quote the drift behavior c
       }),
     ),
     findings,
+  );
+  assert.throws(
+    () =>
+      assertDriftNarratives(
+        narrativeValue(
+          {},
+          scored(
+            "execution_quality",
+            ORDERING_QUOTE,
+            "Trade exited around $585k market cap, below the original plan.",
+          ),
+        ),
+        findings,
+      ),
+    (error) =>
+      error instanceof AIError &&
+      error.code === "GROUNDING" &&
+      error.grounding?.reason === "PLAN_DRIFT_EVIDENCE_MISMATCH" &&
+      error.grounding.path === "dimensions[3].explanation" &&
+      error.grounding.evidenceIds?.length === 2,
+  );
+});
+
+test("sparse risk narratives require owned retrospective evidence for adherence claims", async () => {
+  const { assertSparseRiskNarratives } = await import("../../src/server/reviews/service");
+  const observations = {
+    id: ID_OBSERVATIONS,
+    kind: "trade_data",
+    text: "phase: after_the_fact manual observations, not decision-time evidence\nretrospective_comments: I ignored my risk rule.",
+  };
+  const snapshot = {
+    id: ID_SNAPSHOT,
+    kind: "user_input",
+    text: "original confirmed decision snapshot:\nriskRule: Withdraw if I notice the chart going down past my initial investment.",
+  };
+  const catalogById = new Map([
+    [ID_OBSERVATIONS, observations],
+    [ID_SNAPSHOT, snapshot],
+  ]);
+  const risk = (overrides: Record<string, unknown>) => ({
+    dimensions: REVIEW_DIMENSIONS.map((dimension) => ({
+      dimension,
+      score: dimension === "risk_discipline" ? 40 : null,
+      explanation: "insufficient evidence",
+      confidence: 0,
+      evidenceRefs: [ID_OBSERVATIONS],
+      observedFacts: [],
+      inferredFindings: [],
+      ...(dimension === "risk_discipline" ? overrides : {}),
+    })),
+    summary: "documented process review",
+    lessons: [],
+  }) as never;
+  const rejects = (value: never, path: string) =>
+    assert.throws(
+      () => assertSparseRiskNarratives(value, catalogById),
+      (error) =>
+        error instanceof AIError &&
+        error.code === "GROUNDING" &&
+        error.grounding?.reason === "UNSUPPORTED_RISK_ADHERENCE" &&
+        error.grounding.path === path &&
+        error.grounding.evidenceIds?.includes(ID_OBSERVATIONS),
+    );
+  rejects(
+    risk({
+      explanation: "A withdrawal rule was stated but not applied; trade remained open despite adverse conditions.",
+    }),
+    "dimensions[2].explanation",
+  );
+  rejects(
+    risk({
+      explanation: "A documented withdrawal rule exists.",
+      inferredFindings: [{ finding: "The withdrawal rule was ignored during the trade.", evidenceRefs: [ID_OBSERVATIONS] }],
+    }),
+    "dimensions[2].inferredFindings[0].finding",
+  );
+  rejects(
+    risk({
+      explanation: "The withdrawal rule was not enforced.",
+      observedFacts: [{ evidenceId: ID_SNAPSHOT, quote: "riskRule: Withdraw if I notice the chart going down past my initial investment." }],
+    }),
+    "dimensions[2].explanation",
+  );
+  assertSparseRiskNarratives(
+    risk({
+      explanation: "The user retrospectively reported ignoring the withdrawal rule.",
+      observedFacts: [{ evidenceId: ID_OBSERVATIONS, quote: "I ignored my risk rule." }],
+    }),
+    catalogById,
+  );
+  assertSparseRiskNarratives(
+    risk({ explanation: "A withdrawal rule was stated; execution adherence is unknown." }),
+    catalogById,
+  );
+  assertSparseRiskNarratives(
+    risk({ explanation: "The risk rule lacks a measurable trigger, so its clarity is weak." }),
+    catalogById,
   );
 });
 

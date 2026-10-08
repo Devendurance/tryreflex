@@ -457,12 +457,13 @@ test("decision snapshot accepts plan fields and rejects retrospective comments",
   assert.equal(withComments.success, false);
 });
 
-test("sparse review uses v11 prompt, keeps outcome unknown, separates retrospective evidence", async () => {
+test("sparse review uses v22 prompt, keeps outcome unknown, separates retrospective evidence", async () => {
   const { generateReview } = await import("../../src/server/reviews/service");
   const { REVIEW_DIMENSIONS } = await import("../../src/server/review-policy");
   const captured: { input: string; promptVersion: string; system: string }[] = [];
   const EV = "623e4567-e89b-42d3-a456-426614174010";
   const ensured: Record<string, string> = {};
+  let ensuredCount = 0;
   const llm = {
     generateText: async () => {
       throw new Error("unused");
@@ -475,8 +476,15 @@ test("sparse review uses v11 prompt, keeps outcome unknown, separates retrospect
     }) {
       captured.push(request);
       const quoteCatalog = (
-        JSON.parse(request.input) as { quoteCatalog: { quoteRef: string; evidenceId: string; quote: string }[] }
-      ).quoteCatalog;
+        JSON.parse(request.input) as {
+          evidenceLedger: {
+            evidenceId: string;
+            quotes: { quoteRef: string; quote: string }[];
+          }[];
+        }
+      ).evidenceLedger.flatMap((entry) =>
+        entry.quotes.map((quote) => ({ ...quote, evidenceId: entry.evidenceId })),
+      );
       const evQuote = quoteCatalog.find((q) => q.evidenceId === EV)?.quoteRef ?? quoteCatalog[0].quoteRef;
       const value = {
         dimensions: REVIEW_DIMENSIONS.map((d) => ({
@@ -487,7 +495,6 @@ test("sparse review uses v11 prompt, keeps outcome unknown, separates retrospect
           observedFacts: [],
           inferredFindings: [],
         })),
-        summary: "insufficient evidence for assessment",
         lessons: [{ text: "record execution details at decision time", supportQuotes: [evQuote] }],
         planDriftLessons: [],
       };
@@ -503,6 +510,13 @@ test("sparse review uses v11 prompt, keeps outcome unknown, separates retrospect
     },
   };
   const persisted: { observedMetrics: Record<string, unknown> }[] = [];
+  const confirmedSnapshot = {
+    ...SNAPSHOT,
+    origins: ["pure_impulse"],
+    intendedTakeProfitMarketCap: "300000",
+    marketCapCurrency: "USD",
+    knowledgeBasis: "retrospective_recollection",
+  };
   const repo = {
     async loadBundle() {
       return {
@@ -524,16 +538,13 @@ test("sparse review uses v11 prompt, keeps outcome unknown, separates retrospect
           id: DECISION_ID,
           status: "confirmed",
           raw_input: "bought some early",
-          confirmed_snapshot: {
-            ...SNAPSHOT,
-            intendedTakeProfitMarketCap: "300000",
-            marketCapCurrency: "USD",
-            knowledgeBasis: "retrospective_recollection",
-          },
+          confirmed_snapshot: confirmedSnapshot,
           confirmed_at: CONFIRMED_AT,
           created_at: CONFIRMED_AT,
         },
-        origins: [],
+        origins: [
+          { label: "pure_impulse", basis: "inference", explanation: "model guessed impulse", confidence: 0.5, observedInputFacts: [] },
+        ],
         sources: [],
         contexts: [],
         events: [
@@ -565,7 +576,10 @@ test("sparse review uses v11 prompt, keeps outcome unknown, separates retrospect
       };
     },
     async ensureEvidence(input: { label: string }) {
-      if (!ensured[input.label]) ensured[input.label] = EV;
+      if (!ensured[input.label]) {
+        ensuredCount += 1;
+        ensured[input.label] = ensuredCount === 1 ? EV : `623e4567-e89b-42d3-a456-426614174${100 + ensuredCount}`;
+      }
       return { id: ensured[input.label] };
     },
     async persistReview(input: { observedMetrics: Record<string, unknown> }) {
@@ -577,7 +591,7 @@ test("sparse review uses v11 prompt, keeps outcome unknown, separates retrospect
     },
   };
   const result = await generateReview(repo as never, llm as never, { tradeId: TRADE_ID });
-  assert.equal(captured[0].promptVersion, "decision-autopsy.v11");
+  assert.equal(captured[0].promptVersion, "decision-autopsy.v22");
   assert.equal(
     (JSON.parse(captured[0].input) as { verifiedDecisionTimeContextAvailable: boolean })
       .verifiedDecisionTimeContextAvailable,
@@ -586,40 +600,134 @@ test("sparse review uses v11 prompt, keeps outcome unknown, separates retrospect
   );
   assert.ok(captured[0].system.includes("sparse retail process reviewer"));
   const input = JSON.parse(captured[0].input) as {
-    evidenceCatalog: { id: string; kind: string }[];
-    quoteCatalog: { quoteRef: string; evidenceId: string; quote: string }[];
+    evidenceLedger: {
+      evidenceId: string;
+      evidenceType: string;
+      knowledgeBasis: string;
+      sourceEntityId: string;
+      timing: string;
+      normalizedFact?: Record<string, unknown>;
+      quotes: { quoteRef: string; quote: string; claimType: string }[];
+    }[];
+    unavailable: Record<string, boolean>;
   };
-  assert.ok(input.evidenceCatalog.every((e) => typeof e.id === "string" && typeof e.kind === "string" && !("text" in e)));
-  const retro = input.quoteCatalog.find((q) => q.quote.includes("after_the_fact"));
-  assert.ok(retro, "retrospective observations must appear as separate evidence");
-  assert.ok(input.quoteCatalog.some((q) => q.quote.includes("i remember it roughly tripled")));
-  const tradeEntry = input.quoteCatalog.find((q) => q.quote === "provider: manual");
-  assert.ok(tradeEntry !== undefined);
+  assert.equal("decisionSnapshot" in input, false, "the ledger replaces the duplicated snapshot/catalog inputs");
+  assert.equal("evidenceCatalog" in input, false);
+  assert.equal("quoteCatalog" in input, false);
   assert.ok(
-    !input.quoteCatalog.some((q) => q.quote === "quantity: null" || q.quote === "entry_price: null"),
+    input.evidenceLedger.every(
+      (entry) =>
+        typeof entry.evidenceId === "string" &&
+        typeof entry.evidenceType === "string" &&
+        typeof entry.knowledgeBasis === "string" &&
+        typeof entry.sourceEntityId === "string" &&
+        typeof entry.timing === "string" &&
+        !("text" in entry),
+    ),
+    "ledger entries carry provenance metadata, never raw text blobs",
+  );
+  const quoteCatalog = input.evidenceLedger.flatMap((entry) =>
+    entry.quotes.map((quote) => ({ ...quote, evidenceId: entry.evidenceId })),
+  );
+  const snapshotEntry = input.evidenceLedger.find(
+    (entry) => entry.sourceEntityId === DECISION_ID && entry.quotes.some((q) => q.quote === "intendedTakeProfitMarketCap: 300000"),
+  );
+  assert.equal(snapshotEntry?.knowledgeBasis, "recollected_decision");
+  assert.equal(snapshotEntry?.timing, "retrospective_recollection");
+  assert.ok(
+    !JSON.stringify(captured[0].input).includes("pure_impulse"),
+    "parser-inferred origin labels never reach the model-facing evidence ledger",
+  );
+  assert.ok(
+    (snapshotEntry?.quotes ?? []).every((q) => !/\borigins?[:|]|\bimpulse\b/i.test(q.quote)),
+    "the confirmed snapshot evidence projects no origins line",
+  );
+  assert.deepEqual(
+    confirmedSnapshot.origins,
+    ["pure_impulse"],
+    "the saved snapshot origins array is untouched by evidence projection",
+  );
+  const observationEntry = input.evidenceLedger.find(
+    (entry) => entry.knowledgeBasis === "retrospective_execution" && entry.quotes.some((q) => q.quote.includes("after_the_fact")),
+  );
+  assert.ok(observationEntry, "retrospective observations must appear as separate evidence");
+  assert.equal(observationEntry?.sourceEntityId, TRADE_ID);
+  assert.equal(observationEntry?.timing, "execution_time_unknown");
+  assert.ok(
+    input.evidenceLedger.some(
+      (entry) => entry.knowledgeBasis === "reported_execution" && entry.quotes.some((q) => q.quote === "provider: manual"),
+    ),
+  );
+  const metricEntry = input.evidenceLedger.find((entry) => entry.knowledgeBasis === "deterministic_derived");
+  assert.ok(metricEntry?.normalizedFact, "the metric row carries a server-derived normalizedFact");
+  for (const excluded of ["netRealizedPnl", "netReturnPct", "outcome", "exitPrice", "amountInvested", "proceedsReceived", "fees"]) {
+    assert.equal(
+      excluded in (metricEntry?.normalizedFact ?? {}),
+      false,
+      `${excluded} stays excluded from normalized facts`,
+    );
+  }
+  assert.ok(metricEntry?.quotes.every((quote) => quote.claimType === "deterministic_fact"));
+  assert.equal(input.unavailable.actualProceeds, false);
+  assert.equal(input.unavailable.realizedPnl, true);
+  assert.equal(input.unavailable.unitPrices, true);
+  assert.equal(input.unavailable.executionTimestamps, true);
+  assert.equal(input.unavailable.verifiedDecisionTimeContext, true);
+  assert.ok(quoteCatalog.some((q) => q.quote.includes("i remember it roughly tripled")));
+  assert.ok(
+    !quoteCatalog.some((q) => q.quote === "quantity: null" || q.quote === "entry_price: null"),
     "unknown execution fields must not be quoted",
   );
   assert.ok(
     !captured[0].input.includes("proceedsReceived") &&
-      !input.quoteCatalog.some((q) => q.quote.includes("user_reported_proceeds_received")),
+      !quoteCatalog.some((q) => q.quote.includes("user_reported_proceeds_received")),
     "money amounts must not be injected into the process catalog",
   );
   const metrics = persisted[0].observedMetrics.tradeMetrics as Record<string, unknown>;
   assert.equal(metrics.outcome, "unknown");
   assert.equal(metrics.netRealizedPnl, null);
   assert.equal(metrics.captureTiming, "retrospective");
+  const inference = (persisted[0] as unknown as { aiInference: { summary: string; summaryBasis: string } }).aiInference;
+  assert.equal(
+    inference.summary,
+    "This review assesses the supplied process evidence. Missing execution information is not evidence of poor execution.",
+    "with no drift findings the sparse summary is the fixed server synopsis",
+  );
+  assert.equal(inference.summaryBasis, "server_derived_evidence_synopsis");
   assert.equal(result.classification, null);
 });
 
-test("sparse prompt v11 keeps grading guards without the duplicated base text", () => {
-  assert.equal(SPARSE_AUTOPSY_PROMPT_VERSION, "decision-autopsy.v11");
+test("sparse prompt v22 keeps grading guards without the duplicated base text", () => {
+  assert.equal(SPARSE_AUTOPSY_PROMPT_VERSION, "decision-autopsy.v22");
   const prompt = SPARSE_AUTOPSY_SYSTEM_PROMPT;
+  assert.ok(prompt.includes("Do not return summary"));
+  assert.ok(prompt.includes("server builds a factual synopsis from its validated Plan Drift findings"));
+  assert.ok(
+    prompt.includes("select executionQuoteRef and behavioralQuoteRef from that finding's behaviorQuoteRefs"),
+  );
+  assert.ok(prompt.includes("intentionally excluded from the narrative ledger"));
+  assert.ok(prompt.includes("Do not infer or advise about psychological motives"));
+  assert.ok(prompt.includes("lessons must be an empty array"));
+  assert.ok(
+    prompt.includes("Claims that a risk rule was not applied, not enforced, ignored, breached, or violated require an explicit retrospective risk-adherence statement"),
+  );
+  assert.ok(prompt.includes("Do not place internal q-number selectors in narrative prose"));
+  assert.ok(
+    prompt.includes("A scored execution explanation must explicitly explain the target change and reported selling action"),
+  );
   assert.ok(prompt.includes("Return exactly one planDriftLessons entry for each supplied drift"));
+  assert.ok(prompt.includes("Its text is only a concrete process takeaway"));
+  assert.ok(prompt.includes("Use no digits and do not mention peaks"));
   assert.ok(prompt.includes("If verifiedDecisionTimeContextAvailable=false, context_awareness must be unassessed"));
-  assert.ok(prompt.includes("Do not use greed or greedy in generated summaries"));
-  assert.ok(prompt.includes("inferred findings and lessons cite supportQuotes arrays of quoteCatalog keys"));
+  assert.ok(prompt.includes("The evidenceLedger is the only allowed source of observations"));
+  assert.ok(
+    prompt.includes("stable owned evidenceId, evidenceType, knowledgeBasis, sourceEntityId, timing classification"),
+  );
+  assert.ok(prompt.includes("inferred findings and lessons cite supportQuotes arrays of ledger quoteRef keys"));
   assert.ok(prompt.includes("Never write evidenceId, quote, or evidenceRefs in the wire response"));
-  assert.ok(prompt.includes("select an observedFacts key from that finding's behaviorQuoteRefs"));
+  assert.ok(
+    prompt.includes("If a dimension is unassessed it stays empty"),
+  );
   assert.ok(
     prompt.includes("Assess the clarity/actionability of a documented risk rule from its wording separately from unknown execution adherence"),
   );
@@ -627,7 +735,7 @@ test("sparse prompt v11 keeps grading guards without the duplicated base text", 
   assert.ok(
     prompt.includes("never realized return, realized loss, financial cost, investment performance, or money left on the table"),
   );
-  assert.ok(prompt.includes("Bare 'Stick to your plan.', 'Do more research.', or 'Control greed.' are rejected."));
+  assert.ok(prompt.includes("Bare 'Stick to your plan.' or 'Do more research.' are rejected."));
   assert.ok(prompt.includes("diagnose psychological/medical conditions"));
   assert.ok(prompt.includes("Context awareness requires verified decision-time conditions; when unavailable, abstain"));
   assert.ok(!prompt.includes("evidence-backed trading-process reviewer"), "compact sparse prompt does not embed the v1 base");
@@ -922,19 +1030,27 @@ async function runSparseReview(
       promptVersion: string;
     }) {
       options.captured?.push(request.input);
-      const evQuote = (
-        JSON.parse(request.input) as { quoteCatalog: { quoteRef: string; evidenceId: string }[] }
-      ).quoteCatalog.find((q) => q.evidenceId === EV)?.quoteRef;
+      const quoteCatalog = (
+        JSON.parse(request.input) as {
+          evidenceLedger: {
+            evidenceId: string;
+            quotes: { quoteRef: string; quote: string }[];
+          }[];
+        }
+      ).evidenceLedger.flatMap((entry) =>
+        entry.quotes.map((quote) => ({ ...quote, evidenceId: entry.evidenceId })),
+      );
+      const evQuote = quoteCatalog.find((q) => q.evidenceId === EV)?.quoteRef ?? quoteCatalog[0]?.quoteRef;
+      const contextFact = options.contextScore !== undefined && evQuote !== undefined ? [{ quoteRef: evQuote }] : [];
       const value = {
         dimensions: REVIEW_DIMENSIONS.map((d) => ({
           dimension: d,
           score: d === "context_awareness" && options.contextScore !== undefined ? options.contextScore : null,
           explanation: "insufficient evidence",
           confidence: 0,
-          observedFacts: [],
+          observedFacts: d === "context_awareness" ? contextFact : [],
           inferredFindings: [],
         })),
-        summary: "insufficient evidence",
         lessons: evQuote === undefined ? [] : [{ text: "record execution details", supportQuotes: [evQuote] }],
         planDriftLessons: [],
       };
@@ -943,6 +1059,7 @@ async function runSparseReview(
     },
   };
   const persisted: { observedMetrics: Record<string, unknown> }[] = [];
+  let ensuredCount = 0;
   const repo = {
     async loadBundle() {
       return {
@@ -990,7 +1107,8 @@ async function runSparseReview(
       };
     },
     async ensureEvidence() {
-      return { id: EV };
+      ensuredCount += 1;
+      return { id: `623e4567-e89b-42d3-a456-426614174${100 + ensuredCount}` };
     },
     async persistReview(input: { observedMetrics: Record<string, unknown> }) {
       persisted.push(input);
@@ -1070,7 +1188,11 @@ test("a scored context dimension fails when no verified decision-time context ex
         },
         { contextScore: 20, captured },
       ),
-    (error) => error instanceof AIError && error.code === "GROUNDING",
+    (error) =>
+      error instanceof AIError &&
+      error.code === "GROUNDING" &&
+      error.grounding?.reason === "DECISION_TIME_CONTEXT_UNAVAILABLE" &&
+      error.grounding.path === "dimensions[1].score",
   );
   assert.equal(
     (JSON.parse(captured[0]) as { verifiedDecisionTimeContextAvailable: boolean })

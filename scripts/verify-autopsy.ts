@@ -6,6 +6,8 @@ import { createMemoryStore } from "../src/server/ai/memory-store";
 import { buildMemoryText } from "../src/server/ai/memory-text";
 import { JinaEmbeddingProvider } from "../src/server/ai/jina";
 import { GroqLLMProvider } from "../src/server/ai/groq";
+import { AIError } from "../src/server/ai/errors";
+import type { LLMProvider, StructuredGenerationRequest } from "../src/server/ai/types";
 import { targetDriftMetrics, type TargetDriftFinding } from "../src/server/reviews/plan-drift";
 import { loadEnvConfig } from "@next/env";
 import { Client } from "pg";
@@ -79,6 +81,9 @@ async function main(): Promise<void> {
   }
   const jar = jarSchema.parse(JSON.parse(await readFile(jarPath, "utf8")));
   const genuine = genuineInputSchema.parse(JSON.parse(await readFile(tradePath, "utf8")));
+  const memoryQuery = process.argv[4] === undefined
+    ? genuine.memoryQuery
+    : z.string().min(1).max(2000).parse(process.argv[4]);
   const client = new Client({ connectionString: getDatabaseUrls().unpooled, ssl: { rejectUnauthorized: true }, connectionTimeoutMillis: 10000, query_timeout: 15000 });
   let inTransaction = false;
   let sequence = 0;
@@ -130,12 +135,35 @@ async function main(): Promise<void> {
     tradeId = z.string().uuid().parse(attached.trade.id);
     verificationStage = "autopsy_generate";
     const runRecorder = createRepositories(session, owner).aiRuns;
-    const llm = new GroqLLMProvider({ maxCompletionTokens: 8192, recorder: { record: async (input) => {
+    const groq = new GroqLLMProvider({ maxCompletionTokens: 8192, recorder: { record: async (input) => {
       const saved = await runRecorder.record(input);
       const meta = input as Record<string, unknown>;
       console.log(JSON.stringify({ status: "ai_run_recorded", pipeline: meta.pipeline ?? null, model: meta.model ?? null, promptVersion: meta.promptVersion ?? null, runStatus: meta.status ?? null, safeErrors: meta.validationErrors ?? null, tokenUsage: meta.tokenUsage ?? null }));
       return saved;
     } } });
+    const llm: LLMProvider = {
+      generateText: (generationRequest) => groq.generateText(generationRequest),
+      generateStructured: async <T>(structuredRequest: StructuredGenerationRequest<T>) => {
+        const originalValidate = structuredRequest.validate;
+        return groq.generateStructured<T>({
+          ...structuredRequest,
+          validate: (wireValue) => {
+            try {
+              originalValidate?.(wireValue);
+            } catch (error) {
+              if (error instanceof AIError && error.grounding) {
+                console.log(JSON.stringify({
+                  status: "local_grounding_diagnostic",
+                  grounding: error.grounding,
+                  rejectedOutput: structuredRequest.schema.parse(wireValue),
+                }, null, 2));
+              }
+              throw error;
+            }
+          },
+        });
+      },
+    };
     console.log(JSON.stringify({ status: "decision_confirmed_before_autopsy", decisionOrigins: draft.inference.origins, confirmedSnapshot: snapshot }));
     const generated = await expectSuccess(await createGenerateReviewHandler({ db: session, authProvider: authA, llm })(request({ tradeId })), 201);
     reviewId = z.string().uuid().parse(generated.review.id);
@@ -225,12 +253,13 @@ async function main(): Promise<void> {
       context: { status: "unavailable", reason: "No time-aligned decision context attached by this verifier. Current enrichment is not historical evidence." },
       deterministicMetrics: read.review.metrics.tradeMetrics, decisionQuality: quality, outcome: expectedMetrics.outcome,
       classification: generated.classification, dimensionResults: read.review.dimensions, planDrift,
-      summary: read.review.summary, lessons: read.review.lessons, evidence: read.review.evidence,
+      summary: read.review.summary, summaryBasis: read.review.summaryBasis, lessonBasis: read.review.lessonBasis,
+      lessons: read.review.lessons, evidence: read.review.evidence,
       evidenceLinks: links.rows[0].count, foreignRead: 404, originalSnapshotPreserved: true,
       unavailableDimensions: read.review.dimensions.filter((dimension: { score: unknown }) => dimension.score === null).map((dimension: { dimension: string; explanation: string }) => ({ dimension: dimension.dimension, explanation: dimension.explanation })),
     };
     console.log(JSON.stringify({ ...report, status: "autopsy_generated_before_rollback" }, null, 2));
-    if (genuine.memoryQuery !== undefined) {
+    if (memoryQuery !== undefined) {
       verificationStage = "memory_embedding_and_retrieval";
       const repos = createRepositories(session, owner);
       const embedder = new JinaEmbeddingProvider();
@@ -245,7 +274,7 @@ async function main(): Promise<void> {
       assert.equal(stored.entity_id, reviewId);
       assert.equal(stored.model, "jina-embeddings-v5-text-small");
       assert.equal(stored.dimensions, 1024);
-      const query = await embedder.embedQuery(genuine.memoryQuery);
+      const query = await embedder.embedQuery(memoryQuery);
       assert.equal(query.model, stored.model);
       assert.equal(query.dimensions, stored.dimensions);
       const hits = await repos.memoryEmbeddings.searchByVector({ embedding: query.vector, model: query.model, dimensions: query.dimensions, limit: 10 });
@@ -258,7 +287,7 @@ async function main(): Promise<void> {
       assert.equal(await foreignRepos.memoryEmbeddings.get(String(stored.id)), null);
       const foreignHits = await foreignRepos.memoryEmbeddings.searchByVector({ embedding: query.vector, model: query.model, dimensions: query.dimensions, limit: 10 });
       assert.ok(!foreignHits.some((hit) => hit.entity_id === reviewId));
-      report.memory = { status: "verified", model: stored.model, dimensions: stored.dimensions, textVersion: canonical.version, sourceText: canonical.text, query: genuine.memoryQuery, retrievalRank: rank + 1, similarity: hits[rank].similarity, ownerIsolation: "verified" };
+      report.memory = { status: "verified", model: stored.model, dimensions: stored.dimensions, textVersion: canonical.version, sourceText: canonical.text, query: memoryQuery, retrievalRank: rank + 1, similarity: hits[rank].similarity, ownerIsolation: "verified" };
     }
     await client.query("ROLLBACK");
     inTransaction = false;

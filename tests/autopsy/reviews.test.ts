@@ -12,6 +12,7 @@ import {
   getReview,
   groundedAutopsySchema,
   resolveAutopsyQuotes,
+  validateAutopsy,
   type AutopsyResult,
 } from "../../src/server/reviews/service";
 
@@ -573,11 +574,15 @@ function catalogDrivenLlm(
     async generateStructured<T>(request: StructuredGenerationRequest<T>): Promise<GenerationResult<T>> {
       captured?.push({ input: request.input });
       const input = JSON.parse(request.input) as {
-        evidenceCatalog: { id: string; kind: string }[];
-        quoteCatalog: { quoteRef: string; evidenceId: string; quote: string }[];
-        planDrift: unknown[];
+        evidenceLedger: {
+          evidenceId: string;
+          quotes: { quoteRef: string; quote: string }[];
+        }[];
+        planDrift: { behaviorQuoteRefs: string[] }[];
       };
-      const quoteCatalog = input.quoteCatalog;
+      const quoteCatalog = input.evidenceLedger.flatMap((entry) =>
+        entry.quotes.map((quote) => ({ ...quote, evidenceId: entry.evidenceId })),
+      );
       const inputRef = quoteCatalog.find((q) => q.quote === "I looked at no evidence at all.")!.quoteRef;
       const snapshotRef = quoteCatalog.find((q) => q.quote === "intendedTakeProfitMarketCap: 1000000")!.quoteRef;
       const changeRef = quoteCatalog.find(
@@ -591,16 +596,20 @@ function catalogDrivenLlm(
           return {
             dimension,
             score,
-            explanation: "documented rationale",
+            explanation:
+              dimension === "execution_quality" && input.planDrift.length > 0
+                ? "The user reported the target changed from $1M to $2M and they did not sell at the reported peak."
+                : "documented rationale",
             confidence: score === null ? 0 : 0.8,
             observedFacts: score === null ? [] : [{ quoteRef: refFor(dimension) }],
             inferredFindings: [],
           };
         }),
-        summary: "documented process review",
         lessons: [],
-        planDriftLessons: input.planDrift.map(() => ({
-          text: "The reported target shifted from $1M to $2M while the user did not sell.",
+        planDriftLessons: input.planDrift.map((finding) => ({
+          text: "The reported target changed while holding, which changed the selling decision; record new supporting evidence before revising execution expectations.",
+          executionQuoteRef: finding.behaviorQuoteRefs[0],
+          behavioralQuoteRef: finding.behaviorQuoteRefs[0],
         })),
       };
       request.schema.parse(value);
@@ -652,7 +661,75 @@ test("sparse review derives plan drift from owned catalog and keeps outcome unkn
   }).planDrift[0];
   assert.match(wireDrift.originalTargetQuoteRef ?? "", /^q\d+$/);
   assert.ok(wireDrift.behaviorQuoteRefs.length >= 1 && wireDrift.behaviorQuoteRefs.every((ref) => /^q\d+$/.test(ref)));
+  assert.equal(
+    "userSelfAssessment" in wireDrift,
+    false,
+    "the model-facing drift object omits the user's self-assessment",
+  );
   assert.ok(finding.evidenceRefs.every((ref) => !/^q\d+$/.test(ref)), "q-selectors are never persisted as evidence refs");
+  const input = JSON.parse(captured[0].input) as {
+    evidenceLedger: {
+      evidenceId: string;
+      evidenceType: string;
+      knowledgeBasis: string;
+      sourceEntityId: string;
+      timing: string;
+      normalizedFact?: Record<string, unknown>;
+      quotes: { quoteRef: string; quote: string; claimType: string }[];
+    }[];
+    unavailable: Record<string, boolean>;
+  };
+  assert.equal("decisionSnapshot" in input, false, "the snapshot is folded into the ledger");
+  assert.equal("evidenceCatalog" in input, false);
+  assert.equal("quoteCatalog" in input, false);
+  assert.ok(
+    input.evidenceLedger.every(
+      (entry) =>
+        /^[0-9a-f-]{36}$/.test(entry.evidenceId) &&
+        typeof entry.evidenceType === "string" &&
+        (entry.sourceEntityId === DECISION_ID || entry.sourceEntityId === TRADE_ID),
+    ),
+    "every ledger entry keeps a stable owned evidenceId and a real source entity",
+  );
+  const snapshotEntry = input.evidenceLedger.find(
+    (entry) => entry.sourceEntityId === DECISION_ID && entry.quotes.some((q) => q.quote === "intendedTakeProfitMarketCap: 1000000"),
+  );
+  assert.equal(snapshotEntry?.knowledgeBasis, "recollected_decision");
+  assert.equal(snapshotEntry?.timing, "retrospective_recollection");
+  const observationEntry = input.evidenceLedger.find((entry) => entry.knowledgeBasis === "retrospective_execution");
+  assert.equal(observationEntry?.sourceEntityId, TRADE_ID);
+  assert.equal(observationEntry?.timing, "execution_time_unknown");
+  const selfAssessmentQuote = observationEntry?.quotes.find((q) => q.quote.startsWith("Self-assessment:"));
+  assert.equal(
+    selfAssessmentQuote,
+    undefined,
+    "self-assessment quotes are excluded from the model-facing ledger",
+  );
+  assert.ok(
+    input.evidenceLedger.flatMap((entry) => entry.quotes).every((q) => q.claimType !== "user_retrospective_self_assessment"),
+  );
+  assert.ok(
+    !captured[0].input.includes("I think greed influenced me"),
+    "raw self-assessment text never reaches the model input",
+  );
+  const metricEntry = input.evidenceLedger.find((entry) => entry.knowledgeBasis === "deterministic_derived");
+  assert.ok(metricEntry?.normalizedFact, "the deterministic metric row carries a normalizedFact");
+  for (const excluded of ["netRealizedPnl", "netReturnPct", "outcome", "exitPrice", "amountInvested", "proceedsReceived", "fees"]) {
+    assert.equal(
+      excluded in (metricEntry?.normalizedFact ?? {}),
+      false,
+      `${excluded} stays excluded from normalized facts`,
+    );
+  }
+  assert.ok(
+    metricEntry?.quotes.every((quote) => quote.claimType === "deterministic_fact"),
+    "server-derived metric quotes are tagged deterministic_fact",
+  );
+  assert.equal(input.unavailable.actualProceeds, true);
+  assert.equal(input.unavailable.realizedPnl, true);
+  assert.equal(input.unavailable.unitPrices, true);
+  assert.equal(input.unavailable.executionTimestamps, true);
+  assert.equal(input.unavailable.verifiedDecisionTimeContext, true);
   assert.equal(finding.userSelfAssessment[0].text.includes("greed"), true);
   assert.ok(!finding.explanation.includes("greed"));
   assert.equal(
@@ -668,6 +745,47 @@ test("sparse review derives plan drift from owned catalog and keeps outcome unkn
   const metrics = persisted[0].observedMetrics;
   assert.equal((metrics.tradeMetrics as Record<string, unknown>).outcome, "unknown");
   assert.equal(persisted[0].processClassification, null);
+  const inference = (persisted[0] as unknown as {
+    aiInference: {
+      summary: string;
+      summaryBasis: string;
+      lessonBasis: string;
+      lessons: { text: string; evidenceRefs: string[] }[];
+      evidenceLedger: { quotes: { quoteRef: string; quote: string; claimType: string }[] }[];
+    };
+  }).aiInference;
+  assert.equal(
+    inference.summary,
+    finding.explanation,
+    "the persisted sparse summary is the server-derived finding synopsis, not model text",
+  );
+  assert.equal(inference.summaryBasis, "server_derived_evidence_synopsis");
+  assert.equal(
+    inference.lessonBasis,
+    "server_facts_plus_model_process_takeaway",
+    "sparse product lessons are server facts plus the model takeaway",
+  );
+  const persistedDriftLesson = inference.lessons.find((lesson) =>
+    lesson.text.startsWith("The remembered take-profit target was"),
+  );
+  assert.ok(persistedDriftLesson, "the assembled drift lesson is persisted");
+  assert.ok(persistedDriftLesson?.text.includes("Reported peak market-cap observation: 1600000 USD."));
+  assert.ok(persistedDriftLesson?.text.includes("Reported exit market-cap observation: 585000 USD."));
+  assert.ok(
+    persistedDriftLesson?.text.endsWith("These are retrospective market-cap observations, not verified fills or realized returns."),
+  );
+  const persistedSelfAssessment = inference.evidenceLedger
+    .flatMap((entry) => entry.quotes)
+    .find((quote) => quote.claimType === "user_retrospective_self_assessment");
+  assert.ok(
+    persistedSelfAssessment?.quote.startsWith("Self-assessment:"),
+    "the persisted full ledger keeps the exact self-assessment quote and claim type",
+  );
+  assert.equal(
+    (metrics.planDrift as { userSelfAssessment: { text: string }[] }[])[0].userSelfAssessment.length,
+    1,
+    "the server-owned finding still carries the user self-assessment",
+  );
   assert.equal(result.classification, null);
   assert.equal((metrics.planDrift as unknown[]).length, 1);
 });
@@ -838,6 +956,7 @@ test("groundedAutopsySchema wire selects catalog quote pairs by one ref and reje
   const catalog = [
     { id: EV_INPUT, text: "decision raw input:\nI looked at no evidence at all." },
     { id: EV_SNAPSHOT, text: "original confirmed decision snapshot:\nintendedTakeProfitMarketCap: 1000000" },
+    { id: EV_OBS, text: "retrospective comments:\nSelf-assessment: I think greed influenced me." },
   ];
   const { schema, quoteCatalog } = groundedAutopsySchema(catalog);
   const refFor = (evidenceId: string, quoteIncludes: string) =>
@@ -859,7 +978,6 @@ test("groundedAutopsySchema wire selects catalog quote pairs by one ref and reje
   });
   const result = (dimension: Record<string, unknown>, lessons: unknown[] = [], planDriftLessons: unknown[] = []) => ({
     dimensions: [dimension, ...REVIEW_DIMENSIONS.slice(1).map((d) => base(d))],
-    summary: "documented process review",
     lessons,
     planDriftLessons,
   });
@@ -924,16 +1042,67 @@ test("groundedAutopsySchema wire selects catalog quote pairs by one ref and reje
     "the model cannot paraphrase because there is no return quote field",
   );
   assert.equal(
-    schema.safeParse(result(scored(inputRef), [], [{ text: "extra drift lesson" }])).success,
+    schema.safeParse(
+      result(scored(inputRef), [], [{ text: "extra drift lesson", executionQuoteRef: inputRef, behavioralQuoteRef: inputRef }]),
+    ).success,
     false,
     "the model cannot invent a dedicated drift lesson slot when no finding exists",
   );
+  assert.equal(
+    schema.safeParse({ ...result(scored(inputRef)), planDrift: [{ metrics: { targetIncreasePct: 999 } }] }).success,
+    false,
+    "model-supplied planDrift metrics are a strict extra key",
+  );
+  assert.equal(
+    schema.safeParse({ ...result(scored(inputRef)), summary: "Greed caused it" }).success,
+    false,
+    "a model-supplied summary is a strict extra key, never silently dropped",
+  );
+  const selfRef = refFor(EV_OBS, "Self-assessment");
+  assert.equal(
+    schema.safeParse(result({ ...scored(inputRef), observedFacts: [{ quoteRef: selfRef }] })).success,
+    false,
+    "a self-assessment quote is not a selectable observedFacts key",
+  );
+  assert.equal(
+    schema.safeParse(result(scored(inputRef), [{ text: "lesson", supportQuotes: [selfRef] }])).success,
+    false,
+    "a self-assessment quote is not a selectable lesson supportQuotes key",
+  );
   assert.equal(schema.safeParse(result(base("research_quality"))).success, true, "null abstention stays accepted");
-  const finding = { evidenceRefs: [EV_INPUT, EV_SNAPSHOT] } as never;
+  const finding = {
+    explanation: "The reported take-profit target moved from $1M to $2M.",
+    ordering: { evidenceId: EV_INPUT, quote: "I looked at no evidence at all." },
+    originalPlan: { value: "1000000", metric: "market_cap", currency: "USD" },
+    revisedPlan: { value: "2000000", metric: "market_cap", currency: "USD" },
+    observations: { peakMarketCap: "1600000", exitMarketCap: "585000" },
+    observedFacts: [
+      { evidenceId: EV_SNAPSHOT, quote: "intendedTakeProfitMarketCap: 1000000" },
+      { evidenceId: EV_INPUT, quote: "I looked at no evidence at all." },
+    ],
+    evidenceRefs: [EV_INPUT, EV_SNAPSHOT],
+  } as never;
   const drift = groundedAutopsySchema(catalog, [finding]);
-  const driftLesson = { text: "The reported target shifted from $1M to $2M while the user did not sell." };
+  const snapshotRef = refFor(EV_SNAPSHOT, "intendedTakeProfitMarketCap");
+  const driftLesson = {
+    text: "The reported target changed while holding, which changed the selling decision; record new supporting evidence before revising execution expectations.",
+    executionQuoteRef: inputRef,
+    behavioralQuoteRef: inputRef,
+  };
   const driftWire = result(scored(inputRef), [], [driftLesson]);
   assert.equal(drift.schema.safeParse(driftWire).success, true, "one dedicated slot per supplied finding");
+  assert.equal(
+    drift.schema.safeParse(result(scored(inputRef), [], [{ ...driftLesson, executionQuoteRef: snapshotRef }])).success,
+    false,
+    "a role selector restricted to the finding's behavior statements rejects the original-target quote",
+  );
+  assert.equal(
+    drift.schema.safeParse(
+      result(scored(inputRef), [], [{ ...driftLesson, behavioralQuoteRef: "q999" }]),
+    ).success,
+    false,
+    "a role selector outside the allowed behavior keys is rejected",
+  );
   assert.equal(
     drift.schema.safeParse(result(scored(inputRef))).success,
     false,
@@ -958,10 +1127,105 @@ test("groundedAutopsySchema wire selects catalog quote pairs by one ref and reje
     false,
     "an evidenceRefs key on the dedicated slot is rejected",
   );
+  assert.equal(
+    schema.safeParse(result(scored(inputRef), [{ text: "Keep researching before acting.", supportQuotes: [inputRef] }])).success,
+    true,
+    "generic lessons remain supported when no drift finding is supplied",
+  );
+  assert.equal(
+    drift.schema.safeParse(
+      result(scored(inputRef), [{ text: "Keep researching before acting.", supportQuotes: [inputRef] }], [driftLesson]),
+    ).success,
+    false,
+    "nonempty generic lessons are a strict schema failure when drift is present",
+  );
+  assert.throws(
+    () =>
+      resolveAutopsyQuotes(
+        result(scored(inputRef), [{ text: "Keep researching before acting.", supportQuotes: [inputRef] }], [driftLesson]),
+        drift.quoteCatalog,
+        [finding],
+      ),
+    "the resolver rejects nonempty generic lessons when drift is present",
+  );
+  const notSpecific = (text: string) =>
+    assert.throws(
+      () => resolveAutopsyQuotes(result(scored(inputRef), [], [{ ...driftLesson, text }]), drift.quoteCatalog, [finding]),
+      (e) =>
+        e instanceof AIError &&
+        e.code === "GROUNDING" &&
+        e.grounding?.reason === "PLAN_DRIFT_LESSON_NOT_SPECIFIC" &&
+        e.grounding.path === "planDriftLessons[0].text" &&
+        e.grounding.evidenceIds?.length === 2,
+    );
+  notSpecific("The user changed the selling decision while holding.");
+  notSpecific("The target and the selling decision stayed put.");
+  notSpecific("The target changed while holding.");
+  notSpecific("The target changed before the peak, altering the selling decision.");
+  notSpecific("Stick to your plan.");
+  for (const verb of ["revising", "changing", "raising", "increasing", "shifting"]) {
+    const accepted = resolveAutopsyQuotes(
+      result(scored(inputRef), [], [{ ...driftLesson, text: `The target kept ${verb} upward while holding, which altered the selling decision.` }]),
+      drift.quoteCatalog,
+      [finding],
+    );
+    assert.ok(accepted.lessons[0].text.includes(verb), `gerund ${verb} survives as a process takeaway`);
+  }
+  assert.equal(
+    drift.schema.safeParse(result(scored(inputRef), [], [{ ...driftLesson, text: "The target moved from $1M to $2M." }])).success,
+    false,
+    "digits in the model takeaway are rejected so the deterministic facts cannot be replaced",
+  );
   const driftResolved = resolveAutopsyQuotes(driftWire, drift.quoteCatalog, [finding]);
-  assert.deepEqual(driftResolved.lessons, [
-    { text: driftLesson.text, evidenceRefs: [EV_INPUT, EV_SNAPSHOT] },
-  ]);
+  const assembledLesson = driftResolved.lessons[0].text;
+  assert.ok(
+    assembledLesson.startsWith(
+      "The remembered take-profit target was 1000000 USD market cap, and the user reported revising the expectation to 2000000 USD while holding.",
+    ),
+    "the product drift lesson leads with deterministic server facts",
+  );
+  assert.ok(assembledLesson.includes("Reported peak market-cap observation: 1600000 USD."));
+  assert.ok(assembledLesson.includes("Reported exit market-cap observation: 585000 USD."));
+  assert.ok(assembledLesson.includes(driftLesson.text), "the model supplies only the process takeaway");
+  assert.ok(assembledLesson.endsWith("These are retrospective market-cap observations, not verified fills or realized returns."));
+  assert.ok(!/\b(?:before|after)\b.{0,60}\bpeak(?:ed)?\b/i.test(assembledLesson), "server facts assert no peak chronology");
+  assert.deepEqual(driftResolved.lessons[0].evidenceRefs, [EV_INPUT, EV_SNAPSHOT]);
+  assert.equal(
+    "executionQuoteRef" in (driftResolved.lessons[0] as Record<string, unknown>),
+    false,
+    "wire role selectors never leak into product lessons",
+  );
+  assert.deepEqual(
+    driftResolved.dimensions[3].observedFacts,
+    [],
+    "an unassessed execution dimension gets no role-appended facts",
+  );
+  assert.deepEqual(driftResolved.dimensions[3].evidenceRefs, []);
+  const scoredExec = resolveAutopsyQuotes(
+    result({ ...base("execution_quality"), score: 55, confidence: 0.6, observedFacts: [] }, [], [driftLesson]),
+    drift.quoteCatalog,
+    [finding],
+  );
+  assert.deepEqual(
+    scoredExec.dimensions[0].observedFacts,
+    [{ evidenceId: EV_INPUT, quote: "I looked at no evidence at all." }],
+    "a scored execution dimension gains the model-selected execution role fact",
+  );
+  assert.deepEqual(scoredExec.dimensions[0].evidenceRefs, [EV_INPUT]);
+  assert.throws(
+    () =>
+      resolveAutopsyQuotes(
+        { ...driftWire, planDriftLessons: [{ ...driftLesson, executionQuoteRef: snapshotRef }] },
+        drift.quoteCatalog,
+        [finding],
+      ),
+    (error) =>
+      error instanceof AIError &&
+      error.code === "GROUNDING" &&
+      error.grounding?.reason === "PLAN_DRIFT_EVIDENCE_MISMATCH" &&
+      error.grounding.path === "planDriftLessons[0].executionQuoteRef" &&
+      error.grounding.evidenceIds?.[0] === EV_SNAPSHOT,
+  );
   const wire = z.toJSONSchema(schema) as unknown as {
     properties: {
       dimensions: {
@@ -988,6 +1252,10 @@ test("groundedAutopsySchema wire selects catalog quote pairs by one ref and reje
     !factItem.properties.quoteRef.enum.some((ref) => ref === EV_INPUT || ref === EV_SNAPSHOT),
     "wire selector enums never contain owned evidence IDs",
   );
+  assert.ok(
+    !factItem.properties.quoteRef.enum.includes(selfRef),
+    "self-assessment quotes are excluded from the selector enum",
+  );
   assert.ok(Array.isArray(dimItem.score.anyOf), "nullable score anyOf unchanged");
   assert.throws(
     () => groundedAutopsySchema([]),
@@ -999,6 +1267,7 @@ test("resolveAutopsyQuotes maps refs to exact owned pairs and rejects extras and
   const catalog = [
     { id: EV_INPUT, text: "decision raw input:\nI looked at no evidence at all." },
     { id: EV_SNAPSHOT, text: "original confirmed decision snapshot:\nintendedTakeProfitMarketCap: 1000000" },
+    { id: EV_OBS, text: "retrospective comments:\nSelf-assessment: I think greed influenced me." },
   ];
   const { schema, quoteCatalog } = groundedAutopsySchema(catalog);
   const base = (dimension: string) => ({
@@ -1014,7 +1283,6 @@ test("resolveAutopsyQuotes maps refs to exact owned pairs and rejects extras and
       { ...base("research_quality"), score: 70, confidence: 0.8, observedFacts: facts, ...extra },
       ...REVIEW_DIMENSIONS.slice(1).map((d) => base(d)),
     ],
-    summary: "documented process review",
     lessons: [],
     planDriftLessons: [],
   });
@@ -1041,7 +1309,11 @@ test("resolveAutopsyQuotes maps refs to exact owned pairs and rejects extras and
   assert.equal(schema.parse(wireResult([{ quoteRef: ref }])).dimensions[0].score, 70);
   assert.throws(
     () => resolveAutopsyQuotes(wireResult([{ quoteRef: "unknown:0" }]), quoteCatalog),
-    (error) => error instanceof AIError && error.code === "GROUNDING",
+    (error) =>
+      error instanceof AIError &&
+      error.code === "GROUNDING" &&
+      error.grounding?.reason === "UNKNOWN_QUOTE_SELECTOR" &&
+      error.grounding.path === "dimensions[0].observedFacts[0].quoteRef",
   );
   assert.throws(
     () =>
@@ -1054,6 +1326,165 @@ test("resolveAutopsyQuotes maps refs to exact owned pairs and rejects extras and
   assert.throws(
     () => resolveAutopsyQuotes(wireResult([{ quoteRef: ref }], { evidenceRefs: [EV_INPUT] }), quoteCatalog),
     "a model-supplied evidenceRefs key is rejected, never trusted",
+  );
+  assert.throws(
+    () => resolveAutopsyQuotes({ ...wireResult([{ quoteRef: ref }]), summary: "Greed caused it" }, quoteCatalog),
+    "a model-supplied summary is rejected, never silently dropped",
+  );
+  const selfRef = quoteCatalog.find((q) => q.evidenceId === EV_OBS && q.quote.startsWith("Self-assessment:"))!.quoteRef;
+  assert.throws(
+    () => resolveAutopsyQuotes(wireResult([{ quoteRef: selfRef }]), quoteCatalog),
+    (error) =>
+      error instanceof AIError &&
+      error.code === "GROUNDING" &&
+      error.grounding?.reason === "QUOTE_NOT_FROM_ALLOWED_SOURCE" &&
+      error.grounding.path === "dimensions[0].observedFacts[0].quoteRef" &&
+      error.grounding.evidenceIds?.[0] === EV_OBS,
+  );
+  assert.throws(
+    () => resolveAutopsyQuotes(wireResult([{ quoteRef: "q999" }]), quoteCatalog),
+    (error) =>
+      error instanceof AIError &&
+      error.grounding?.reason === "UNKNOWN_QUOTE_SELECTOR" &&
+      error.grounding.path === "dimensions[0].observedFacts[0].quoteRef",
+    "unknown and disallowed selectors carry distinct reasons",
+  );
+  const synopsis = resolveAutopsyQuotes(
+    {
+      ...wireResult([{ quoteRef: ref }]),
+      planDriftLessons: [
+        {
+          text: "The reported target changed while holding, which changed the selling decision.",
+          executionQuoteRef: ref,
+          behavioralQuoteRef: ref,
+        },
+      ],
+    },
+    quoteCatalog,
+    [
+      {
+        explanation: "The reported take-profit target moved from $1M to $2M after the original target was already exceeded.",
+        ordering: { evidenceId: EV_INPUT, quote: "I looked at no evidence at all." },
+        originalPlan: { value: "1000000", metric: "market_cap", currency: "USD" },
+        revisedPlan: { value: "2000000", metric: "market_cap", currency: "USD" },
+        observations: { peakMarketCap: null, exitMarketCap: null },
+        observedFacts: [
+          { evidenceId: EV_SNAPSHOT, quote: "intendedTakeProfitMarketCap: 1000000" },
+          { evidenceId: EV_INPUT, quote: "I looked at no evidence at all." },
+        ],
+        evidenceRefs: [EV_SNAPSHOT],
+      } as never,
+    ],
+  );
+  assert.equal(
+    synopsis.summary,
+    "The reported take-profit target moved from $1M to $2M after the original target was already exceeded.",
+    "the product summary is the server-derived finding synopsis, not model text",
+  );
+  assert.equal(
+    resolveAutopsyQuotes(wireResult([{ quoteRef: ref }]), quoteCatalog).summary,
+    "This review assesses the supplied process evidence. Missing execution information is not evidence of poor execution.",
+  );
+});
+
+test("validateAutopsy reports the exact grounding reason and field path", () => {
+  const catalog = new Map([
+    [EV_INPUT, { id: EV_INPUT, kind: "user_input", text: "decision raw input:\nI looked at no evidence at all." }],
+    [EV_SNAPSHOT, { id: EV_SNAPSHOT, kind: "decision", text: "original confirmed decision snapshot:\nintendedTakeProfitMarketCap: 1000000" }],
+  ]);
+  const base = (dimension: string) => ({
+    dimension,
+    score: null,
+    explanation: "insufficient evidence",
+    confidence: 0,
+    evidenceRefs: [] as string[],
+    observedFacts: [] as { evidenceId: string; quote: string }[],
+    inferredFindings: [] as { finding: string; evidenceRefs: string[] }[],
+  });
+  const value = (dimension: Record<string, unknown>, lessons: unknown[] = []) =>
+    ({
+      dimensions: [dimension, ...REVIEW_DIMENSIONS.slice(1).map((d) => base(d))],
+      summary: "documented process review",
+      lessons,
+    }) as unknown as AutopsyResult;
+  const scored = (overrides: Record<string, unknown> = {}) => ({
+    ...base("research_quality"),
+    score: 70,
+    confidence: 0.8,
+    evidenceRefs: [EV_INPUT],
+    observedFacts: [{ evidenceId: EV_INPUT, quote: "I looked at no evidence at all." }],
+    ...overrides,
+  });
+  const reasonPath = (fn: () => void) => {
+    try {
+      fn();
+    } catch (error) {
+      assert.ok(error instanceof AIError && error.code === "GROUNDING" && error.grounding !== undefined);
+      return error as AIError & { grounding: { reason: string; path: string } };
+    }
+    return assert.fail("expected a grounding error");
+  };
+  const fail = (fn: () => void, reason: string, path: string) => {
+    const error = reasonPath(fn);
+    assert.equal(error.grounding.reason, reason);
+    assert.equal(error.grounding.path, path);
+  };
+
+  validateAutopsy(value(base("research_quality")), catalog);
+  validateAutopsy(value(scored()), catalog);
+  fail(
+    () => validateAutopsy(value(scored({ observedFacts: [], evidenceRefs: [] })), catalog),
+    "OBSERVED_FACT_UNSUPPORTED",
+    "dimensions[0].observedFacts",
+  );
+  fail(
+    () => validateAutopsy(value({ ...base("research_quality"), observedFacts: [{ evidenceId: EV_INPUT, quote: "I looked at no evidence at all." }] }), catalog),
+    "UNASSESSED_DIMENSION_HAS_EVIDENCE",
+    "dimensions[0]",
+  );
+  fail(
+    () => validateAutopsy(value(scored({ evidenceRefs: [EV_FOREIGN] })), catalog),
+    "UNKNOWN_EVIDENCE_ID",
+    "dimensions[0].evidenceRefs[0]",
+  );
+  fail(
+    () => validateAutopsy(value(scored({ observedFacts: [{ evidenceId: EV_SNAPSHOT, quote: "intendedTakeProfitMarketCap: 1000000" }] })), catalog),
+    "OBSERVED_FACT_UNSUPPORTED",
+    "dimensions[0].observedFacts[0].evidenceId",
+  );
+  fail(
+    () => validateAutopsy(value(scored({ observedFacts: [{ evidenceId: EV_INPUT, quote: "not in the catalog" }] })), catalog),
+    "QUOTE_NOT_EXACT",
+    "dimensions[0].observedFacts[0].quote",
+  );
+  fail(
+    () => validateAutopsy(value(scored({ inferredFindings: [{ finding: "checked", evidenceRefs: [] }] })), catalog),
+    "INFERENCE_MISSING_EVIDENCE",
+    "dimensions[0].inferredFindings[0].evidenceRefs",
+  );
+  fail(
+    () => validateAutopsy(value(scored({ inferredFindings: [{ finding: "checked", evidenceRefs: [EV_SNAPSHOT] }] })), catalog),
+    "INFERENCE_MISSING_EVIDENCE",
+    "dimensions[0].inferredFindings[0].evidenceRefs[0]",
+  );
+  fail(
+    () =>
+      validateAutopsy(
+        { ...value(scored()), dimensions: [scored(), scored(), ...REVIEW_DIMENSIONS.slice(2).map((d) => base(d))] } as unknown as AutopsyResult,
+        catalog,
+      ),
+    "DUPLICATE_OR_CONTRADICTORY_EVIDENCE",
+    "dimensions[1].dimension",
+  );
+  fail(
+    () => validateAutopsy(value(scored(), [{ text: "lesson", evidenceRefs: [] }]), catalog),
+    "INFERENCE_MISSING_EVIDENCE",
+    "lessons[0].evidenceRefs",
+  );
+  fail(
+    () => validateAutopsy(value(scored(), [{ text: "lesson", evidenceRefs: [EV_FOREIGN] }]), catalog),
+    "UNKNOWN_EVIDENCE_ID",
+    "lessons[0].evidenceRefs[0]",
   );
 });
 

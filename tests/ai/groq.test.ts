@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { z } from "zod";
-import { AIError } from "../../src/server/ai/errors";
+import { AIError, groundingFailure } from "../../src/server/ai/errors";
 import { GroqLLMProvider } from "../../src/server/ai/groq";
 import type { AiRunRecorder } from "../../src/server/ai/types";
 
@@ -321,6 +321,33 @@ test("failed run recorded once with safe validation error category", async () =>
   assert.equal(run.status, "failed");
   assert.deepEqual(run.validationErrors, [{ category: "PROVIDER" }]);
   assert.ok(!JSON.stringify(run).includes("sys"));
+});
+
+test("grounding diagnostics are recorded with the failed run", async () => {
+  const fetchImpl: typeof fetch = async () => jsonResponse(groqBody('{"answer":"x"}'));
+  const recorder = fakeRecorder();
+  await assert.rejects(
+    () =>
+      provider(fetchImpl, { recorder }).generateStructured({
+        ...REQ,
+        schema: objectSchema,
+        schemaName: "a",
+        validate: () => groundingFailure("QUOTE_NOT_EXACT", "dimensions[0].observedFacts[0].quote"),
+      }),
+    (e) =>
+      e instanceof AIError &&
+      e.code === "GROUNDING" &&
+      e.grounding?.reason === "QUOTE_NOT_EXACT" &&
+      e.grounding.path === "dimensions[0].observedFacts[0].quote",
+  );
+  const run = recorder.calls[0] as {
+    status: string;
+    validationErrors: { category: string; grounding?: { reason: string; path: string } }[];
+  };
+  assert.equal(run.status, "failed");
+  assert.deepEqual(run.validationErrors, [
+    { category: "GROUNDING", grounding: { reason: "QUOTE_NOT_EXACT", path: "dimensions[0].observedFacts[0].quote" } },
+  ]);
 });
 
 test("coerced, stripped, or transformed output is rejected fail-closed", async () => {
