@@ -12,8 +12,8 @@ type RecordState =
   | { kind: "unavailable" }
   | { kind: "error" };
 
-const LOOP = [
-  { step: "Capture the thinking", detail: "Write what you believe before the result exists, then confirm it." },
+const LOOP: { step: string; detail: string; href?: string }[] = [
+  { step: "Capture the thinking", detail: "Write what you believe before the result exists, then confirm it.", href: "/app/decisions" },
   { step: "Attach the trade", detail: "Add a trade by hand or import your Bitget spot history." },
   { step: "Review the process", detail: "Decision Autopsy scores the process separately from P&L." },
   { step: "Find the pattern", detail: "Decision DNA compares reviewed decisions as they accumulate." },
@@ -127,7 +127,7 @@ export function Overview() {
           <h2 id="loop-title" className="text-[20px] leading-7 font-medium text-ink">
             How your desk fills up
           </h2>
-          <p className="mt-2 text-[14px] leading-[22px]">Each step opens in this workspace as it ships. Decision capture comes first.</p>
+          <p className="mt-2 text-[14px] leading-[22px]">Each step opens in this workspace as it ships. Decision capture is ready now.</p>
           <ol className="mt-5 flex flex-col">
             {LOOP.map((item, index) => (
               <li key={item.step} className="flex gap-4 border-t border-hairline py-4 first:border-t-0 first:pt-0 last:pb-0">
@@ -137,7 +137,13 @@ export function Overview() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                     <p className="text-[15px] leading-6 font-medium text-ink">{item.step}</p>
-                    <span className="t-data text-[11px] leading-4 font-semibold tracking-[0.1em] text-crosshair uppercase">Soon</span>
+                    {item.href ? (
+                      <Link href={item.href} className="text-[14px] font-medium text-ink underline decoration-hairline underline-offset-4 hover:decoration-ink">
+                        Open Decision Desk
+                      </Link>
+                    ) : (
+                      <span className="t-data text-[11px] leading-4 font-semibold tracking-[0.1em] text-crosshair uppercase">Soon</span>
+                    )}
                   </div>
                   <p className="text-[14px] leading-[22px]">{item.detail}</p>
                 </div>

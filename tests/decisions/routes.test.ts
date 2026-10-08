@@ -8,6 +8,7 @@ import {
   createConfirmHandler,
   createContextHandler,
   createGetHandler,
+  createListHandler,
   createParseHandler,
 } from "../../src/server/decisions/http";
 import {
@@ -188,6 +189,25 @@ test("cross-owner read returns 404 without exposing another decision", async () 
   const db = fakeSession();
   const response = await createGetHandler({ authProvider: authProvider(), db })(new Request("http://localhost"), { id: OTHER_ID });
   assert.equal(response.status, 404);
+});
+
+test("decision list is owner-scoped, bounded, and returns summaries only", async () => {
+  const db = fakeSession("confirmed");
+  const response = await createListHandler({ authProvider: authProvider(), db })(new Request("http://localhost/api/decisions?limit=5"));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.hasMore, false);
+  assert.deepEqual(Object.keys(body.decisions[0]).sort(), ["assetClass", "assetSymbol", "confirmedAt", "createdAt", "excerpt", "id", "side", "status"]);
+  assert.equal(body.decisions[0].status, "confirmed");
+  const listCall = db.calls.find((call) => call.text.startsWith("SELECT * FROM public.decisions WHERE user_id=$1 ORDER BY"));
+  assert.deepEqual(listCall?.values, [USER_ID, 6]);
+
+  const unknownKey = await createListHandler({ authProvider: authProvider(), db })(new Request("http://localhost/api/decisions?owner=someone"));
+  assert.equal(unknownKey.status, 400);
+  const tooMany = await createListHandler({ authProvider: authProvider(), db })(new Request("http://localhost/api/decisions?limit=500"));
+  assert.equal(tooMany.status, 400);
+  const anonymous = await createListHandler({ authProvider: authProvider(null), db: fakeSession() })(new Request("http://localhost/api/decisions"));
+  assert.equal(anonymous.status, 401);
 });
 
 test("available market context persists observed facts and provenance evidence", async () => {

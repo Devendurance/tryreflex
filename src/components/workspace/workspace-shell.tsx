@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, LayoutDashboard, Loader2, LogOut, Menu, X, type LucideIcon } from "lucide-react";
+import { ChevronDown, LayoutDashboard, Loader2, LogOut, Menu, NotebookPen, X, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -17,8 +17,11 @@ export function useWorkspaceUser(): WorkspaceUser {
   return user;
 }
 
-const NAV: { href: string; label: string; icon: LucideIcon }[] = [{ href: "/app", label: "Overview", icon: LayoutDashboard }];
-const UPCOMING = ["Decision Desk", "Trade Activity", "Reviews & DNA", "Playbook", "Pre-Trade Recall"];
+const NAV: { href: string; label: string; icon: LucideIcon }[] = [
+  { href: "/app", label: "Overview", icon: LayoutDashboard },
+  { href: "/app/decisions", label: "Decision Desk", icon: NotebookPen },
+];
+const UPCOMING = ["Trade Activity", "Reviews & DNA", "Playbook", "Pre-Trade Recall"];
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
@@ -26,7 +29,7 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
     <nav aria-label="Workspace" className="flex flex-col gap-8">
       <ul className="flex flex-col gap-1">
         {NAV.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href;
+          const active = href === "/app" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
           return (
             <li key={href}>
               <Link

@@ -218,6 +218,38 @@ export function createGetHandler(deps: DecisionRouteDeps = {}) {
   };
 }
 
+const listQuerySchema = z.strictObject({ limit: z.coerce.number().int().min(1).max(50).default(20) });
+const EXCERPT_LENGTH = 180;
+
+/** Owner-scoped recent decisions. Summaries only; the full record stays behind GET /api/decisions/[id]. */
+export function createListHandler(deps: DecisionRouteDeps = {}) {
+  return async function GET(request: Request): Promise<Response> {
+    try {
+      const { limit } = listQuerySchema.parse(Object.fromEntries(new URL(request.url).searchParams));
+      const { repos } = await getRouteContext(deps, false);
+      const rows = await repos.decisions.list(limit + 1);
+      return jsonResponse(200, {
+        decisions: rows.slice(0, limit).map((row) => {
+          const raw = typeof row.raw_input === "string" ? row.raw_input : "";
+          return {
+            id: row.id,
+            status: row.status,
+            assetSymbol: row.asset_symbol ?? null,
+            assetClass: row.asset_class ?? null,
+            side: row.side ?? null,
+            createdAt: row.created_at,
+            confirmedAt: row.confirmed_at ?? null,
+            excerpt: raw.length > EXCERPT_LENGTH ? `${raw.slice(0, EXCERPT_LENGTH).trimEnd()}…` : raw,
+          };
+        }),
+        hasMore: rows.length > limit,
+      });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
+}
+
 function contextFacts(result: MarketContextResult): { observedFacts: Record<string, unknown>; provenance: Record<string, unknown>; evidenceLabels: string[]; providers: string[] } {
   const observedComponents: Record<string, unknown> = {};
   const provenanceComponents: Record<string, unknown> = {};
