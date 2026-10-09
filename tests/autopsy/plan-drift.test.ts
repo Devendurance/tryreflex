@@ -348,6 +348,41 @@ test("drift narratives require attributed retrospection and deny unsupported fin
     "dimensions[4].inferredFindings[0].finding",
   );
   rejects(
+    narrativeValue(
+      {},
+      narrativeDimensions({
+        behavioral_control: {
+          explanation: "The trader showed overconfidence and kept holding for a higher target.",
+        },
+      }),
+    ),
+    "UNSUPPORTED_MOTIVE_CLAIM",
+    "dimensions[4].explanation",
+  );
+  rejects(
+    narrativeValue(
+      {},
+      narrativeDimensions({
+        behavioral_control: {
+          explanation: "There was no optimism bias; the user simply revised the target.",
+        },
+      }),
+    ),
+    "UNSUPPORTED_MOTIVE_CLAIM",
+    "dimensions[4].explanation",
+  );
+  assertDriftNarratives(
+    narrativeValue(
+      {},
+      narrativeDimensions({
+        behavioral_control: {
+          explanation: "The user retrospectively attributed the change partly to greed.",
+        },
+      }),
+    ),
+    findings,
+  );
+  rejects(
     narrativeValue({}, narrativeDimensions({ execution_quality: { explanation: "The result was a suboptimal exit." } })),
     "UNSUPPORTED_FINANCIAL_CLAIM",
     "dimensions[3].explanation",

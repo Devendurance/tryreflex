@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-10-08
+Last updated: 2026-10-09
 
 ## What this is
 
@@ -70,3 +70,4 @@ Last updated: 2026-10-08
 
 - Scaffolded with create-next-app defaults plus `--src-dir` and `--turbopack`.
 - Product direction locked to Reflex per docs/.
+- 3F.1 (2026-10-09): second live Autopsy attempt failed with the identical generic grounding rejection at the behavioral dimension explanation, no review saved. Sparse prompt bumped v22 to v23 with an explicit behavioral-language guardrail; grounding validation untouched. All gates green. STOP, awaiting approval for one post-fix live verification.

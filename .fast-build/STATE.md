@@ -48,8 +48,7 @@
 - 3B: Decision Desk /app/decisions + /app/decisions/[id], GET /api/decisions owner-scoped list. Inferred origins never pre-ticked, explicit attestation, failed parse leaves a draft in Recent decisions. Correcting a confirmed decision not in UI yet.
 
 ## Blockers
-- Fresh autopsy grounding reliability (affects 3D/3F). 3D UI shows UNSUPPORTED_INFERENCE honestly but the live path is unproven.
-- No genuine decision+trade pair in the user's account yet, so autopsy, DNA, Playbook and Recall can't be shown with real data.
+- Fresh autopsy grounding reliability (affects 3D/3F). 3D UI shows UNSUPPORTED_INFERENCE honestly but the live path is unproven. Autopsy attempted twice and rejected on grounding; accepted persistence, DNA, Playbook and Recall remain unverified.
 - Agent browser has no Neon session: signed-in screens need the user to check or share captures. Never create Neon Auth accounts without approval.
 
 ## Verification
@@ -58,8 +57,17 @@
 - NOT live-verified: populated Playbook (proposals, accept/reject/defer, version history, memory) and populated Recall (memories, patterns, rules, model_selected/fallback). Account has no accepted reviews or DNA; backend tests above are the only evidence. No UI component tests exist.
 - 3D agent: review-list 4/4; test:autopsy 142/142 (first run hit the known AgentKey timing flake at sparse.test.ts:1463, two reruns clean); type-check, lint 0 errors, production build pass. Anonymous /app/autopsies, /app/autopsies/[id], /app/dna 307 -> /sign-in; GET /api/reviews, /api/reviews/[id], /api/decisions/[id]/trades, /api/dna and POST trades/manual, reviews/generate, patterns/recompute all 401.
 - 3D user-verified (user's browser, not agent browser): Autopsies and DNA empty states correct (no Update button on empty DNA); confirmed decision shows "No trade evidence yet"; empty submit blocked; differing symbol reveals required reason; Cancel saves nothing; 1440/820/390/320 no overflow/clipping/copy issues. No trade saved, no autopsy generated.
-- NOT live-verified: manual trade save, real Groq autopsy, review detail rendering, DNA recompute. User has no real trade matching the confirmed decision; nothing fabricated.
+- Historical 3D checkpoint, superseded for manual-trade persistence by 3F.1 below: NOT live-verified: manual trade save, real Groq autopsy, review detail rendering, DNA recompute. User has no real trade matching the confirmed decision; nothing fabricated.
 - 3C: user ran genuine INJ CSV live. 3B: test:decisions 14/14, user ran a genuine decision end to end.
 
+## Current slice: 3F.1 IN PROGRESS (second attempt verified read-only, prompt fix applied, no live retry)
+- User-saved decision/trade pair verified read-only: exactly one confirmed decision with one attached manual trade, revision v1 only, review count 0. Origins keep user-confirmed and inference rows separate. No database writes by agent. Existing unrelated records remain unlinked. Financial unknowns remain unknown.
+- First attempt (read-only verified): one failed decision-autopsy run, same model and prompt, attempts 1, generic evidence-validation error UNSUPPORTED_MOTIVE_CLAIM at dimensions[4].explanation. No review row saved, decision/trade unchanged. Honest failure path worked as designed.
+- Second attempt (read-only verified): a second failed decision-autopsy run exists with the identical generic category, reason and path. No accepted review persisted, dimension count 0. Decision/trade data unchanged; evidence bookkeeping rows were reused from the first attempt with no new evidence rows. Schema, quote and earlier sparse guards passed before the drift-narrative guard rejected. Rejected text is not stored. Same guard family as historical rollback-verifier rejections, different field and input.
+- Reliability correction (prompt-only, validation unchanged): sparse prompt v22 to v23 adds an explicit behavioral-language guardrail. The model must never emit optimism, optimism-bias or overconfidence terms in any narrative field including negated forms, must describe only the quoted target revision and reported selling action, must phrase greed only as retrospective self-assessment with explicit attribution, must treat user-confirmed origins as the only origin evidence, must preserve uncertainty and unassessed dimensions, must keep unknown PnL unknown, and must describe drift ordering only from reported statements. Grounding validation untouched, no post-processing, no invented evidence.
+- Regressions: plan-drift validator tests (unsupported overconfidence rejected, negated motive still rejected per unconditional policy, attributed greed permitted); sparse end-to-end motive violation fails closed with zero persisted reviews; prompt-content guards. Gates: test:autopsy 144/144, type-check clean, lint 0 errors (2 pre-existing warnings), build pass, diff-check clean, full test:all green.
+- Privacy: this note carries no financial figures, UUIDs, raw rationale, private timestamps or account information.
+
 ## Next action
-- 3F.1 ONLY after the user's final RUNNER evidence clarification and explicit approval (raw text wording incl. "no evidence at all" vs "little research", invalidation sentence, fee basis $10 inside/on top of $20, who performs writes). Origin handling is now resolved by 3F.0A. User performs writes in their own browser (agent has no Neon session). Fail closed on grounding rejection, max 3 manual retries. Then 3F.2 Playbook/Recall with real history, 3F.3 test:all + gates + deploy prep. No second test user, no deploy without authorization.
+- STOP. No live retry authorized. The system is ready for ONE separately authorized post-fix live verification in the user's own browser with unchanged inputs. No DNA, Playbook or Recall work, no weakening of grounding validation.
+- Complete only 3F.1. No rule accept/reject/defer, second account, deployment, further permanent trades, 3F.2 or 3F.3. Full release suite reserved for 3F.3.

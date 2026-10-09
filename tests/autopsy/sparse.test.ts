@@ -592,7 +592,7 @@ test("sparse review uses v22 prompt, keeps outcome unknown, separates retrospect
     },
   };
   const result = await generateReview(repo as never, llm as never, { tradeId: TRADE_ID });
-  assert.equal(captured[0].promptVersion, "decision-autopsy.v22");
+  assert.equal(captured[0].promptVersion, "decision-autopsy.v23");
   assert.equal(
     (JSON.parse(captured[0].input) as { verifiedDecisionTimeContextAvailable: boolean })
       .verifiedDecisionTimeContextAvailable,
@@ -698,8 +698,8 @@ test("sparse review uses v22 prompt, keeps outcome unknown, separates retrospect
   assert.equal(result.classification, null);
 });
 
-test("sparse prompt v22 keeps grading guards without the duplicated base text", () => {
-  assert.equal(SPARSE_AUTOPSY_PROMPT_VERSION, "decision-autopsy.v22");
+test("sparse prompt v23 keeps grading guards without the duplicated base text", () => {
+  assert.equal(SPARSE_AUTOPSY_PROMPT_VERSION, "decision-autopsy.v23");
   const prompt = SPARSE_AUTOPSY_SYSTEM_PROMPT;
   assert.ok(prompt.includes("Do not return summary"));
   assert.ok(prompt.includes("server builds a factual synopsis from its validated Plan Drift findings"));
@@ -737,6 +737,12 @@ test("sparse prompt v22 keeps grading guards without the duplicated base text", 
     prompt.includes("never realized return, realized loss, financial cost, investment performance, or money left on the table"),
   );
   assert.ok(prompt.includes("Bare 'Stick to your plan.' or 'Do more research.' are rejected."));
+  assert.ok(prompt.includes("never use the terms optimism, optimism bias, or overconfidence"));
+  assert.ok(prompt.includes("including negated, qualified, or attributed forms"));
+  assert.ok(prompt.includes("the user retrospectively attributed the change partly to greed"));
+  assert.ok(prompt.includes("an inferred pure_impulse label alone never establishes impulsive behavior"));
+  assert.ok(prompt.includes("keep unknown proceeds and PnL unknown"));
+  assert.ok(prompt.includes("without inventing dates or peak chronology"));
   assert.ok(prompt.includes("diagnose psychological/medical conditions"));
   assert.ok(prompt.includes("Context awareness requires verified decision-time conditions; when unavailable, abstain"));
   assert.ok(!prompt.includes("evidence-backed trading-process reviewer"), "compact sparse prompt does not embed the v1 base");
@@ -1212,6 +1218,81 @@ test("a scored context dimension fails when no verified decision-time context ex
     },
   );
   assert.equal(metrics.marketCapMovementMultiple, "3");
+});
+
+test("an unsupported motive explanation fails closed and persists no review", async () => {
+  const { generateReview } = await import("../../src/server/reviews/service");
+  const { REVIEW_DIMENSIONS } = await import("../../src/server/review-policy");
+  const llm = {
+    generateText: async () => {
+      throw new Error("unused");
+    },
+    async generateStructured(request: { input: string; validate?: (v: unknown) => void; promptVersion: string }) {
+      const quoteCatalog = (
+        JSON.parse(request.input) as {
+          evidenceLedger: { evidenceId: string; quotes: { quoteRef: string; quote: string }[] }[];
+        }
+      ).evidenceLedger.flatMap((entry) => entry.quotes.map((quote) => ({ ...quote, evidenceId: entry.evidenceId })));
+      const ref = quoteCatalog[0]?.quoteRef;
+      const value = {
+        dimensions: REVIEW_DIMENSIONS.map((d) => ({
+          dimension: d,
+          score: d === "behavioral_control" ? 30 : null,
+          explanation:
+            d === "behavioral_control"
+              ? "The trader showed overconfidence and kept holding for a higher target."
+              : "insufficient evidence",
+          confidence: d === "behavioral_control" ? 0.5 : 0,
+          observedFacts: d === "behavioral_control" && ref !== undefined ? [{ quoteRef: ref }] : [],
+          inferredFindings: [],
+        })),
+        lessons: [],
+        planDriftLessons: [],
+      };
+      request.validate?.(value);
+      return { value, provider: "groq", model: "m", promptVersion: request.promptVersion, runId: "r", attempts: 1 };
+    },
+  };
+  let persisted = 0;
+  let ensuredCount = 0;
+  const repo = {
+    async loadBundle() {
+      return {
+        trade: {
+          id: TRADE_ID, provider: "manual", symbol: "BTCUSDT", side: "long", quantity: null, entry_price: null,
+          exit_price: null, fees: "0", realized_pnl: null, opened_at: null, closed_at: null,
+          created_at: "2026-10-08T00:00:00.000Z",
+        },
+        decision: {
+          id: DECISION_ID, status: "confirmed", raw_input: "bought some early",
+          confirmed_snapshot: { ...SNAPSHOT }, confirmed_at: CONFIRMED_AT, created_at: CONFIRMED_AT,
+        },
+        origins: [], sources: [], contexts: [],
+        events: [{ facts: { kind: "trade_provenance", source: "manual", feesKnown: false, calculationBasis: "manual_observations", settlementCurrency: null, netPnlBasis: "unavailable", receivedAt: "2026-10-08T00:00:00.000Z", eventTimeBasis: "recorded_at", manualObservations: {} } }],
+        evidence: [],
+      };
+    },
+    async ensureEvidence() {
+      ensuredCount += 1;
+      return { id: `623e4567-e89b-42d3-a456-426614174${100 + ensuredCount}` };
+    },
+    async persistReview() {
+      persisted += 1;
+      return { review: { id: "rev-1" }, dimensions: [] };
+    },
+    async getReviewView() {
+      return { review: null, trade: null, decision: null, dimensions: [], evidenceLinks: [] };
+    },
+  };
+  await assert.rejects(
+    () => generateReview(repo as never, llm as never, { tradeId: TRADE_ID }),
+    (error) =>
+      error instanceof AIError &&
+      error.code === "GROUNDING" &&
+      error.grounding?.reason === "UNSUPPORTED_MOTIVE_CLAIM" &&
+      error.grounding.path === "dimensions[4].explanation",
+  );
+  assert.equal(persisted, 0, "a motive-violating narrative must not produce an accepted review");
 });
 
 type RpcCall = { method: string; params: Record<string, unknown> };
