@@ -60,9 +60,10 @@
 - Historical 3D checkpoint, superseded for manual-trade persistence by 3F.1 below: NOT live-verified: manual trade save, real Groq autopsy, review detail rendering, DNA recompute. User has no real trade matching the confirmed decision; nothing fabricated.
 - 3C: user ran genuine INJ CSV live. 3B: test:decisions 14/14, user ran a genuine decision end to end.
 
-## Current slice: 3F.1 DONE (v23 Autopsy accepted live, integrity verified read-only)
+## Current slice: 3F.1 DONE (v23 Autopsy accepted live, DNA verified read-only)
 - User-initiated post-fix attempt succeeded: one accepted review, version 1, provisional quality 42.5 with 80% weighted coverage, outcome unknown, no process/outcome classification. Four dimensions scored, context unassessed, five owned evidence links all owner-valid. Financial unknowns stayed unknown; no realized PnL or execution timestamps fabricated. Confirmed and inferred origins remain separate. Target drift references only owned retrospective evidence with self-assessment preserved separately. Independent readback returns the identical review.
-- Watchpoint (no action taken): the saved behavioral finding uses optimistic-expectation phrasing that the current validator vocabulary does not match. A targeted future validator/prompt correction may be warranted; the accepted review is left untouched.
+- Live DNA recompute (user-clicked once) verified read-only: exactly 3 active observation-level findings and nothing else. Leak on weak research quality grounded in exact review quotes, influence on confirmed social confirmation with correct provenance, execution on reported target drift with owned retrospective evidence. Unselected inferred impulse produced no finding. All evidence links owner-valid, one locked-model embedding per finding, prior-review marker present. Aggregates match the UI exactly: one reviewed decision, provisional average 42.5, 80% coverage, zero emerging or established, outcome unknown. Deterministic DNA narratives carry no motive language and the standard single-decision disclaimer. Independent readback identical.
+- Watchpoint (no action taken): the saved behavioral finding uses optimistic-expectation phrasing that the current validator vocabulary does not match. It did not propagate into DNA output. A targeted future validator/prompt correction may still be warranted; all records left untouched.
 - Privacy: this note carries no financial figures, UUIDs, raw rationale, private timestamps or account information.
 
 ## Next action
