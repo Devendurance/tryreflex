@@ -1,36 +1,106 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Reflex — evidence-backed trading decision intelligence
 
-## Getting Started
+Reflex is a self-evolving trading decision desk for crypto and 24/7 tokenized
+US equities. Its thesis: separate decision quality from financial outcome,
+because P&L alone is a poor teacher.
 
-First, run the development server:
+Core loop: Capture → Confirm → Review → Find the pattern → Carry the lesson.
+Decide, trade, understand, learn, evolve, recall, decide better.
+
+## What it does
+
+- Decision Desk: capture a thesis, inspect the parser's exact-quote
+  extraction, then confirm an immutable snapshot.
+- Trade evidence: attach manual trades or import Bitget Classic spot history
+  from CSV with per-order purpose declarations. Unknowns stay unknown.
+- Autopsy: a grounded reviewer scores five process dimensions against
+  owned evidence only. Ungrounded claims fail closed, nothing is invented.
+- Decision DNA: deterministic observation/emerging/established findings
+  recomputed from accepted reviews. One review can only ever be an
+  observation, never a habit.
+- Playbook: deterministic rule proposals from DNA findings. Rules start
+  Experimental, stay unproven, and never auto-activate or trade.
+- Pre-Trade Recall: semantic retrieval over owned history with
+  server-authored watchpoints. Proposals are never saved.
+
+Market context comes only from two allowlisted public MCP servers
+(Bitget equities quotes/history, crypto sentiment). If a provider fails,
+the API reports unavailable instead of inventing data.
+
+## Stack
+
+Next.js 16 (App Router, `src/`), React 19, TypeScript, Tailwind CSS 4,
+Drizzle ORM on Neon Postgres, Groq structured reasoning, Jina embeddings,
+Neon Auth sessions. Package manager: npm.
+
+## Setup
+
+```bash
+npm install
+```
+
+Copy `.env.example` to `.env.local` and fill in values (names only listed
+here; values stay out of the repo):
+
+- `DATABASE_URL` (pooled Neon endpoint), `DATABASE_URL_UNPOOLED` (direct)
+- `GROQ_API_KEY`, `GROQ_MODEL`
+- `JINA_API_KEY`, `JINA_EMBEDDING_MODEL`, `JINA_EMBEDDING_DIMENSIONS`
+- `NEON_AUTH_BASE_URL`, `NEON_AUTH_COOKIE_SECRET` (32+ characters)
+- `BITGET_ACCOUNT_AUTH_SUBJECT` (binds server-held credentials, optional)
+- `AGENTKEY_API_KEY`, `BITGET_API_KEY`, `BITGET_SECRET_KEY`,
+  `BITGET_PASSPHRASE`, `MCP_TIMEOUT_MS` (optional integrations/diagnostics)
+
+Database migrations (generate then migrate; never push):
+
+```bash
+npm run db:generate
+npm run db:migrate
+npm run db:verify
+```
+
+Run locally:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npx next start -p 3002   # production server; restart it after every build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Verification
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run test:all
+npm run type-check
+npm run lint
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Live provider checks (require real credentials, roll back all rows):
 
-## Learn More
+```bash
+npm run verify:ai
+npm run verify:authenticated-decisions
+npm run verify:bitget-trades
+npm run verify:autopsy
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Demo path
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Landing (`/`) → sign in → Overview (`/app`) → Decision Desk
+(`/app/decisions`) → Trade Activity (`/app/activity`) → Autopsies
+(`/app/autopsies`) → DNA (`/app/dna`) → Playbook (`/app/playbook`) →
+Pre-Trade Recall (`/app/recall`).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Privacy and evidence integrity
 
-## Deploy on Vercel
+- Rows are owner-scoped; cross-owner reads return 404.
+- Append-only evidence tables are trigger-protected.
+- Prompts, credentials, raw provider bodies and hidden reasoning are never
+  persisted. AI bookkeeping stores safe failure categories only.
+- No mock market data: unavailable providers produce honest errors.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Known limitations
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Autopsy generation can reject ungrounded output and ask for a retry.
+- Playbook accept/reject memory flows and two-account live isolation are
+  covered by automated tests but not yet live-verified end to end.
+- No autonomous order execution exists anywhere in the product.

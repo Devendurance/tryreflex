@@ -592,7 +592,7 @@ test("sparse review uses v22 prompt, keeps outcome unknown, separates retrospect
     },
   };
   const result = await generateReview(repo as never, llm as never, { tradeId: TRADE_ID });
-  assert.equal(captured[0].promptVersion, "decision-autopsy.v23");
+  assert.equal(captured[0].promptVersion, "decision-autopsy.v24");
   assert.equal(
     (JSON.parse(captured[0].input) as { verifiedDecisionTimeContextAvailable: boolean })
       .verifiedDecisionTimeContextAvailable,
@@ -698,8 +698,8 @@ test("sparse review uses v22 prompt, keeps outcome unknown, separates retrospect
   assert.equal(result.classification, null);
 });
 
-test("sparse prompt v23 keeps grading guards without the duplicated base text", () => {
-  assert.equal(SPARSE_AUTOPSY_PROMPT_VERSION, "decision-autopsy.v23");
+test("sparse prompt v24 keeps grading guards without the duplicated base text", () => {
+  assert.equal(SPARSE_AUTOPSY_PROMPT_VERSION, "decision-autopsy.v24");
   const prompt = SPARSE_AUTOPSY_SYSTEM_PROMPT;
   assert.ok(prompt.includes("Do not return summary"));
   assert.ok(prompt.includes("server builds a factual synopsis from its validated Plan Drift findings"));
@@ -737,7 +737,7 @@ test("sparse prompt v23 keeps grading guards without the duplicated base text", 
     prompt.includes("never realized return, realized loss, financial cost, investment performance, or money left on the table"),
   );
   assert.ok(prompt.includes("Bare 'Stick to your plan.' or 'Do more research.' are rejected."));
-  assert.ok(prompt.includes("never use the terms optimism, optimism bias, or overconfidence"));
+  assert.ok(prompt.includes("never use the terms optimism, optimism bias, optimistic, optimistically, or overconfidence"));
   assert.ok(prompt.includes("including negated, qualified, or attributed forms"));
   assert.ok(prompt.includes("the user retrospectively attributed the change partly to greed"));
   assert.ok(prompt.includes("an inferred pure_impulse label alone never establishes impulsive behavior"));

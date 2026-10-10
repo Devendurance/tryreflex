@@ -364,6 +364,18 @@ test("drift narratives require attributed retrospection and deny unsupported fin
       {},
       narrativeDimensions({
         behavioral_control: {
+          inferredFindings: [{ finding: "Behavior influenced by optimistic expectation." }],
+        },
+      }),
+    ),
+    "UNSUPPORTED_MOTIVE_CLAIM",
+    "dimensions[4].inferredFindings[0].finding",
+  );
+  rejects(
+    narrativeValue(
+      {},
+      narrativeDimensions({
+        behavioral_control: {
           explanation: "There was no optimism bias; the user simply revised the target.",
         },
       }),

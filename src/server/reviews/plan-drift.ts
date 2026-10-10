@@ -75,7 +75,7 @@ export function assertDriftNarratives(
   const guard = (text: string, path: string) => {
     for (const sentence of narrativeWords(text).split(/(?<=[.!?])\s+/)) {
       if (/\bq\d+\b/i.test(sentence)) groundingFailure("INTERNAL_SELECTOR_IN_NARRATIVE", path);
-      if (/\b(?:optimism(?: bias)?|overconfidence)\b/i.test(sentence)) groundingFailure("UNSUPPORTED_MOTIVE_CLAIM", path);
+      if (/\b(?:optimism(?: bias)?|optimistic(?:ally)?|overconfidence)\b/i.test(sentence)) groundingFailure("UNSUPPORTED_MOTIVE_CLAIM", path);
       if (/\bgreed(?:y)?\b/i.test(sentence) && !(/\b(?:retrospectively|retrospective|self[ -]reported|self[ -]assessment)\b/i.test(sentence) && /\b(?:attribut(?:ed|es|ing|ion)|report(?:ed|s|ing)?|thought|thinks|interpretation|assessment|self-assessed|described|said|stated)\b/i.test(sentence))) groundingFailure("RETROSPECTIVE_ATTRIBUTION_REQUIRED", path);
       if (/\b(?:money left on the table|realized (?:profit|loss|returns?)|investment (?:performance|returns?)|financial (?:loss|gain)|cost of (?:target|plan) drift|suboptimal exit)\b/i.test(sentence) && !/\b(?:not|unknown|unavailable|cannot|never|no evidence|does not|don['’]t)\b/i.test(sentence)) groundingFailure("UNSUPPORTED_FINANCIAL_CLAIM", path);
       if (findings.length > 0 && originalLevelClaim.test(sentence) && !supportsOriginalLevel) {
