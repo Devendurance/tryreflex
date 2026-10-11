@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { FormNotice } from "@/components/auth/form-parts";
-import { api, formatDate, type Snapshot } from "@/components/decisions/decision-api";
+import { ApiDiagnosis, ApiError, api, formatDate, type Snapshot } from "@/components/decisions/decision-api";
 import { Panel, Tag } from "@/components/decisions/decision-parts";
 import { buttonClass } from "@/components/landing/primitives";
 import { autopsyErrorMessage, type DecisionTrade } from "./autopsy-api";
@@ -268,6 +268,275 @@ function RequestAutopsy({ tradeId }: { tradeId: string }) {
   );
 }
 
+type PreviewTrade = {
+  externalId: string;
+  symbol: string;
+  side: "long" | "short";
+  quantity: string;
+  entryPrice: string;
+  exitPrice: string;
+  fees: string;
+  realizedPnl: string;
+  openedAt: string;
+  closedAt: string;
+};
+
+type PreviewResult = {
+  trades: PreviewTrade[];
+  rejected: { externalId: string | null }[];
+  nextCursor: string | null;
+  provider: string;
+  retrievedAt: string;
+};
+
+const FUTURES_SYMBOL = /^[A-Z0-9]{1,30}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function now(): number {
+  return Date.now();
+}
+
+function toDateInput(time: number): string {
+  const date = new Date(time);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function bitgetErrorMessage(error: unknown): string {
+  const apiError = error instanceof ApiError ? error : new ApiError(0, "NETWORK");
+  const { status } = apiError;
+  if (status === 0) return "Couldn't reach Reflex. Check your connection and try again.";
+  if (status === 401) return "Your session ended. Sign in again to continue.";
+  if (status === 403) return "Bitget import isn't available for this sign-in. Manual entry still works.";
+  if (status === 400) return "Check the symbol and date range, then preview again.";
+  if (status === 404) return "This decision doesn't exist, or it belongs to another account.";
+  return `Bitget history is unavailable right now. Nothing was saved. Try again later.${diagnosisNote(apiError.diagnosis)}`;
+}
+
+function diagnosisNote(diagnosis: ApiDiagnosis | null): string {
+  if (!diagnosis) return "";
+  const when = diagnosis.stage === "after_request" ? "after contacting Bitget" : diagnosis.stage === "before_request" ? "before contacting Bitget" : "around the Bitget request";
+  const code = diagnosis.providerCode === "CODE_UNAVAILABLE" ? "with no exchange code returned" : `with exchange code ${diagnosis.providerCode}`;
+  return ` For the record, the failure happened ${when}, ${code}.`;
+}
+
+function BitgetImport({ decisionId, snapshot, onImported }: { decisionId: string; snapshot: Snapshot; onImported: () => void }) {
+  const [availability, setAvailability] = useState<"checking" | "available" | "hidden">("checking");
+  const [open, setOpen] = useState(false);
+  const [category, setCategory] = useState<"USDT-FUTURES" | "USDC-FUTURES">("USDT-FUTURES");
+  const [symbol, setSymbol] = useState(snapshot.assetSymbol.toUpperCase());
+  const [start, setStart] = useState<string>(() => toDateInput(Date.now() - 29 * DAY_MS));
+  const [end, setEnd] = useState<string>(() => toDateInput(Date.now()));
+  const [overrideReason, setOverrideReason] = useState("");
+  const [preview, setPreview] = useState<{ kind: "idle" } | { kind: "pending" } | { kind: "ready"; result: PreviewResult; cursor: string | undefined } | { kind: "error"; message: string }>({ kind: "idle" });
+  const [selected, setSelected] = useState<string[]>([]);
+  const [importState, setImportState] = useState<{ kind: "idle" } | { kind: "pending" } | { kind: "done"; imported: number; deduplicated: number } | { kind: "error"; message: string }>({ kind: "idle" });
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<{ available: boolean }>("/api/trades/bitget/availability")
+      .then(() => { if (!cancelled) setAvailability("available"); })
+      .catch(() => { if (!cancelled) setAvailability("hidden"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (availability !== "available") return null;
+
+  const cleanSymbol = symbol.trim().toUpperCase();
+  const needsOverride = cleanSymbol !== snapshot.assetSymbol.toUpperCase();
+
+  const buildQuery = (cursor: string | undefined) => {
+    const startTime = new Date(`${start}T00:00:00`).getTime();
+    const endTime = new Date(`${end}T23:59:59`).getTime();
+    return { category, symbol: cleanSymbol, startTime, endTime, ...(cursor === undefined ? {} : { cursor }) };
+  };
+
+  const validateQuery = (now: number): string | null => {
+    if (!FUTURES_SYMBOL.test(cleanSymbol)) return "Use the Futures ticker as letters and numbers only, like BTCUSDT.";
+    const startTime = new Date(`${start}T00:00:00`).getTime();
+    const endTime = new Date(`${end}T23:59:59`).getTime();
+    if (Number.isNaN(startTime) || Number.isNaN(endTime)) return "Pick a valid start and end date.";
+    if (endTime > now) return "The end date can't be in the future.";
+    if (endTime - startTime > 30 * DAY_MS) return "Keep the range within 30 days.";
+    if (startTime < now - 90 * DAY_MS) return "Bitget only shows the last 90 days.";
+    return null;
+  };
+
+  const runPreview = async (cursor: string | undefined) => {
+    if (inFlight.current) return;
+    const problem = validateQuery(now());
+    if (problem) { setPreview({ kind: "error", message: problem }); return; }
+    inFlight.current = true;
+    setPreview({ kind: "pending" });
+    setSelected([]);
+    setImportState({ kind: "idle" });
+    try {
+      const result = await api<PreviewResult>("/api/trades/history", { method: "POST", body: JSON.stringify(buildQuery(cursor)) });
+      setPreview({ kind: "ready", result, cursor });
+    } catch (thrown) {
+      setPreview({ kind: "error", message: bitgetErrorMessage(thrown) });
+    } finally {
+      inFlight.current = false;
+    }
+  };
+
+  const toggle = (id: string) => {
+    setSelected((current) => {
+      if (current.includes(id)) return current.filter((entry) => entry !== id);
+      if (current.length >= 10) return current;
+      return [...current, id];
+    });
+  };
+
+  const runImport = async () => {
+    if (inFlight.current || preview.kind !== "ready" || selected.length === 0) return;
+    if (needsOverride && !overrideReason.trim()) {
+      setImportState({ kind: "error", message: "Explain why this symbol differs from the decision before importing." });
+      return;
+    }
+    inFlight.current = true;
+    setImportState({ kind: "pending" });
+    try {
+      const body: Record<string, unknown> = { decisionId, query: buildQuery(preview.cursor), externalIds: selected };
+      if (needsOverride) body.symbolOverrideReason = overrideReason.trim();
+      const result = await api<{ imported: unknown[]; deduplicated: unknown[] }>("/api/trades/import", { method: "POST", body: JSON.stringify(body) });
+      setImportState({ kind: "done", imported: result.imported.length, deduplicated: result.deduplicated.length });
+      setSelected([]);
+      onImported();
+    } catch (thrown) {
+      setImportState({ kind: "error", message: bitgetErrorMessage(thrown) });
+    } finally {
+      inFlight.current = false;
+    }
+  };
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className={`${buttonClass("quiet", "sm")} mt-4`}>
+        Import from Bitget Futures
+      </button>
+    );
+  }
+
+  const ready = preview.kind === "ready" ? preview.result : null;
+  return (
+    <div className="mt-4 rounded-[12px] border border-hairline p-4 sm:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-[16px] font-medium text-ink">Import from Bitget Futures</h3>
+        <button type="button" onClick={() => setOpen(false)} className="text-[14px] font-medium underline underline-offset-4">
+          Close
+        </button>
+      </div>
+      <p className="mt-1 text-[14px] leading-[22px]">
+        Preview closed Futures positions, then choose up to 10 to save as trade evidence. Previewing saves nothing.
+      </p>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <Field id="bitget-category" label="Contract type">
+          <select id="bitget-category" value={category} onChange={(event) => setCategory(event.target.value as "USDT-FUTURES" | "USDC-FUTURES")} className={inputClass}>
+            <option value="USDT-FUTURES">USDT-FUTURES</option>
+            <option value="USDC-FUTURES">USDC-FUTURES</option>
+          </select>
+        </Field>
+        <Field id="bitget-symbol" label="Symbol" hint="Futures ticker, letters and numbers only.">
+          <input id="bitget-symbol" value={symbol} onChange={(event) => setSymbol(event.target.value)} className={inputClass} autoComplete="off" />
+        </Field>
+        <Field id="bitget-start" label="From">
+          <input id="bitget-start" type="date" value={start} max={end} onChange={(event) => setStart(event.target.value)} className={inputClass} />
+        </Field>
+        <Field id="bitget-end" label="To">
+          <input id="bitget-end" type="date" value={end} min={start} onChange={(event) => setEnd(event.target.value)} className={inputClass} />
+        </Field>
+      </div>
+      {needsOverride && FUTURES_SYMBOL.test(cleanSymbol) && (
+        <div className="mt-4">
+          <Field id="bitget-override" label="Why does this differ from the decision?" hint="Previewing needs no explanation. This is only required if you go on to import.">
+            <textarea id="bitget-override" value={overrideReason} onChange={(event) => setOverrideReason(event.target.value)} rows={2} className={`${inputClass} h-auto min-h-[64px] py-2`} />
+          </Field>
+        </div>
+      )}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button type="button" onClick={() => void runPreview(undefined)} disabled={preview.kind === "pending"} className={buttonClass("secondary", "sm")}>
+          {preview.kind === "pending" && <Loader2 size={16} className="animate-spin motion-reduce:animate-none" aria-hidden />}
+          {preview.kind === "pending" ? "Reading history" : "Preview closed positions"}
+        </button>
+        {preview.kind === "pending" && <p role="status" className="text-[14px]">Asking Bitget for closed positions. This can take a few seconds.</p>}
+      </div>
+      {preview.kind === "error" && <div className="mt-4"><FormNotice tone="error">{preview.message}</FormNotice></div>}
+      {ready && (
+        <div className="mt-4" aria-live="polite">
+          <p className="t-caption">Retrieved {formatDate(ready.retrievedAt)} from Bitget ({category}). Net PnL is the provider-reported figure; Reflex doesn&rsquo;t recalculate it or subtract fees again. Times are position open/close as reported, not exact fills.</p>
+          {ready.rejected.length > 0 && (
+            <p className="mt-2 text-[14px]">Skipped {ready.rejected.length} incomplete {ready.rejected.length === 1 ? "position" : "positions"} that {ready.rejected.length === 1 ? "wasn't" : "weren't"} fully closed.</p>
+          )}
+          {ready.trades.length === 0 ? (
+            <p className="mt-3 text-[15px]">No closed positions in this range. Widen the dates or try another symbol.</p>
+          ) : (
+            <ul className="mt-3 flex flex-col gap-3">
+              {ready.trades.map((trade) => {
+                const checked = selected.includes(trade.externalId);
+                const capped = !checked && selected.length >= 10;
+                const rows: [string, string][] = [
+                  ["Quantity", trade.quantity],
+                  ["Entry price", trade.entryPrice],
+                  ["Exit price", trade.exitPrice],
+                  ["Fees", trade.fees],
+                  ["Net PnL (reported)", trade.realizedPnl],
+                  ["Opened", formatDate(trade.openedAt)],
+                  ["Closed", formatDate(trade.closedAt)],
+                ];
+                return (
+                  <li key={trade.externalId} className="rounded-[10px] border border-hairline p-3 sm:p-4">
+                    <label className="flex cursor-pointer items-start gap-3">
+                      <input type="checkbox" checked={checked} disabled={capped} onChange={() => toggle(trade.externalId)} className="mt-1 h-5 w-5 accent-[#f26b1d]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="text-[15px] font-medium text-ink">{trade.symbol}</span>
+                          <Tag>{trade.side === "short" ? "Short" : "Long"}</Tag>
+                          <span className="t-caption">Preview only, not imported</span>
+                        </span>
+                        <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-[13px] sm:grid-cols-3">
+                          {rows.map(([label, content]) => (
+                            <div key={label} className="min-w-0">
+                              <dt className="t-eyebrow text-[11px]">{label}</dt>
+                              <dd className="t-data mt-0.5 break-words">{content}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            {ready.nextCursor && (
+              <button type="button" onClick={() => void runPreview(ready.nextCursor ?? undefined)} disabled={preview.kind === "pending"} className={buttonClass("quiet", "sm")}>
+                Load more
+              </button>
+            )}
+            {ready.trades.length > 0 && (
+              <button type="button" onClick={() => void runImport()} disabled={importState.kind === "pending" || selected.length === 0} className={buttonClass("primary", "sm")}>
+                {importState.kind === "pending" ? "Saving" : `Import ${selected.length} selected`}
+              </button>
+            )}
+            {selected.length >= 10 && <p className="t-caption">Up to 10 positions per import.</p>}
+          </div>
+          {importState.kind === "error" && <div className="mt-4"><FormNotice tone="error">{importState.message}</FormNotice></div>}
+          {importState.kind === "done" && (
+            <div className="mt-4">
+              <FormNotice tone="success">
+                Saved {importState.imported} {importState.imported === 1 ? "position" : "positions"}
+                {importState.deduplicated > 0 && `, ${importState.deduplicated} already saved and skipped`}. The evidence list above is refreshed.
+              </FormNotice>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TradeCard({ trade }: { trade: DecisionTrade }) {
   const value = (v: string | null) => (v ? <span className="t-data">{v}</span> : unknown);
   return (
@@ -365,6 +634,9 @@ export function TradeEvidence({ decisionId, snapshot }: { decisionId: string; sn
         <button type="button" onClick={() => { setAdding(true); setSaved(false); }} className={`${buttonClass(state.trades.length ? "quiet" : "secondary", "sm")} mt-4`}>
           Add trade evidence
         </button>
+      )}
+      {state.kind === "ready" && !watchOnly && (
+        <BitgetImport decisionId={decisionId} snapshot={snapshot} onImported={() => { setSaved(true); void load(); }} />
       )}
       {adding && (
         <AttachForm

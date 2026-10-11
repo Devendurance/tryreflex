@@ -15,7 +15,7 @@ import {
   PersistenceUnavailableError,
   RepositoryError,
 } from "../db/repositories";
-import { TradeError } from "../trades/errors";
+import { diagnosticStageFor, sanitizeDiagnosticCode, TradeError, type DiagnosticStage } from "../trades/errors";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const BODY_DEADLINE_MS = 5000;
@@ -126,7 +126,7 @@ export async function requireAuthenticated(deps: AuthenticatedDeps): Promise<Aut
   return { auth, db };
 }
 
-export function errorResponse(error: unknown): Response {
+export function errorResponse(error: unknown, options: { includeDiagnosis?: boolean } = {}): Response {
   if (error instanceof ConcurrencySaturatedError) {
     return jsonResponse(429, { error: { code: "CONCURRENCY_LIMIT", message: "too many concurrent provider calls" } });
   }
@@ -178,7 +178,16 @@ export function errorResponse(error: unknown): Response {
               : error.code === "PRIVATE_ACCOUNT_FORBIDDEN"
                 ? 403
                 : 503;
-    return jsonResponse(status, { error: { code: error.code, message: error.message } });
+    const body: { error: { code: string; message: string; diagnosis?: { stage: DiagnosticStage; providerCode: string } } } = {
+      error: { code: error.code, message: error.message },
+    };
+    if (options.includeDiagnosis) {
+      body.error.diagnosis = {
+        stage: diagnosticStageFor(error.code),
+        providerCode: sanitizeDiagnosticCode(error.providerCode) ?? "CODE_UNAVAILABLE",
+      };
+    }
+    return jsonResponse(status, body);
   }
   if (error instanceof RepositoryError) {
     const status =

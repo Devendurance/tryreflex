@@ -36,3 +36,27 @@ export function sanitizeProviderCode(value: unknown): string | undefined {
   const cleaned = String(value).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
   return cleaned.length > 0 ? cleaned : undefined;
 }
+
+const DIAGNOSTIC_CODE = /^\d{1,10}$/;
+
+export function sanitizeDiagnosticCode(value: unknown): string | undefined {
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const cleaned = String(value).trim();
+  return DIAGNOSTIC_CODE.test(cleaned) ? cleaned : undefined;
+}
+
+export type DiagnosticStage = "before_request" | "after_request" | "request_unknown";
+
+export function diagnosticStageFor(code: TradeErrorCode): DiagnosticStage {
+  if (code === "PROVIDER") return "after_request";
+  if (
+    code === "INVALID_INPUT" ||
+    code === "CONFIGURATION" ||
+    code === "UNSUPPORTED" ||
+    code === "PRIVATE_ACCOUNT_NOT_BOUND" ||
+    code === "PRIVATE_ACCOUNT_FORBIDDEN"
+  ) {
+    return "before_request";
+  }
+  return "request_unknown";
+}

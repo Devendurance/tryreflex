@@ -98,13 +98,28 @@ export const KNOWLEDGE_BASIS: Record<KnowledgeBasis, string> = {
   unknown: "Not sure",
 };
 
+export type ApiDiagnosis = { stage: "before_request" | "after_request" | "request_unknown"; providerCode: string };
+
 export class ApiError extends Error {
+  readonly diagnosis: ApiDiagnosis | null;
   constructor(
     readonly status: number,
     readonly code: string,
+    diagnosis?: unknown,
   ) {
     super(code);
+    this.diagnosis = isSafeDiagnosis(diagnosis) ? diagnosis : null;
   }
+}
+
+function isSafeDiagnosis(value: unknown): value is ApiDiagnosis {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record.stage === "before_request" || record.stage === "after_request" || record.stage === "request_unknown") &&
+    typeof record.providerCode === "string" &&
+    /^(\d{1,10}|CODE_UNAVAILABLE)$/.test(record.providerCode)
+  );
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -114,8 +129,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new ApiError(0, "NETWORK");
   }
-  const body = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
-  if (!response.ok) throw new ApiError(response.status, body?.error?.code ?? "UNKNOWN");
+  const body = (await response.json().catch(() => null)) as { error?: { code?: string; diagnosis?: unknown } } | null;
+  if (!response.ok) throw new ApiError(response.status, body?.error?.code ?? "UNKNOWN", body?.error?.diagnosis);
   return body as T;
 }
 
