@@ -8,9 +8,11 @@
 
 ### Your trading decisions have a memory.
 
-**Capture the decision. Examine the evidence. Learn from the process. Recall the lesson.**
+**Built for messy, information-overloaded retail traders.**
 
-Reflex is an evidence-backed trading decision desk that helps you understand **how you made a trade**, not just whether it made money.
+Reflex is a personal trading intelligence system that helps messy, information-overloaded retail traders understand how they actually make decisions, learn from both wins and losses without hindsight fooling them, and carry those lessons into the next trade before the same mistake happens again.
+
+**Capture the decision. Examine the evidence. Learn from the process. Recall the lesson.**
 
 [![Live App](https://img.shields.io/badge/Live_App-tryreflex.vercel.app-F26B1D?style=for-the-badge&logo=vercel&logoColor=white)](https://tryreflex.vercel.app)
 [![GitHub Repository](https://img.shields.io/badge/GitHub-Source_Code-181717?style=for-the-badge&logo=github)](https://github.com/Devendurance/tryreflex)
@@ -38,7 +40,9 @@ Reflex is an evidence-backed trading decision desk that helps you understand **h
 
 **P&L is a bad teacher.** A profitable trade can come from a poorly supported decision, and a losing trade can still have followed a sound process. Most trading journals record entries, exits and outcomes, but lose the original thinking that led to the trade.
 
-Reflex preserves the decision as it was understood at the time, links it to genuine trade evidence, reviews the process, and surfaces relevant lessons before a future decision. It deliberately separates **decision quality** from **financial outcome**.
+**Who it's for:** Self-directed retail traders whose decisions are shaped by a messy mix of charts, group chats, social posts, market narratives and their own research. When that information is fragmented, the reasons behind a trade are easily rewritten by hindsight. Reflex is designed to help these traders understand *how they actually decide*—not simply whether a trade won or lost.
+
+Reflex preserves the decision as it was understood at the time, links it to genuine trade evidence, reviews the process, and recalls relevant lessons before a future decision. It deliberately separates **decision quality** from **financial outcome** and does not claim that using Reflex improves returns.
 
 > **The loop:** Decide → Trade → Understand → Learn → Evolve → Recall → Decide better.
 
@@ -51,7 +55,7 @@ Built for **Bitget AI Base Camp Season 2, Track 3: AI Trading Desk — Review & 
 | Stage | Product area | What it does |
 | --- | --- | --- |
 | **Decide** | Decision Desk | Write your rationale in natural language, inspect structured suggestions, correct them and confirm your original decision. |
-| **Trade** | Trade Activity & Evidence | Record known execution facts manually or import Bitget Classic Spot CSV history. Preserve missing values as unknown. |
+| **Trade** | Trade Activity & Evidence | Record genuine execution facts manually, import Bitget Classic Spot CSV history, or use a restricted preview/select workflow for Bitget Futures positions (live UTA retrieval not yet verified). Preserve missing values as unknown. |
 | **Understand** | Autopsy | Review process across research, context, risk, execution and behavioral discipline with evidence-backed findings and explicit coverage. |
 | **Learn** | Decision DNA | Turn accepted reviews into observations. Stronger recurring findings require independent qualifying history. |
 | **Evolve** | Playbook | Propose grounded process rules as **Experimental**. Rules require a user's explicit decision before activation. |
@@ -78,7 +82,8 @@ Built for **Bitget AI Base Camp Season 2, Track 3: AI Trading Desk — Review & 
 | Decision DNA | `docs/media/decision-dna.png` | Observation maturity and supporting review |
 | Playbook | `docs/media/playbook.png` | Experimental proposals pending user action |
 | Pre-Trade Recall | `docs/media/pre-trade-recall.png` | Relevant history, watchpoints and questions |
-| Demo video | `docs/media/demo-link.txt` | Add the public video URL when available |
+| Demo video | `docs/media/demo-link.txt` | Add the public YouTube video URL when available |
+| Bitget Futures preview | `docs/media/bitget-futures-preview.png` | Optional approved screenshot of owner-only history preview; do not imply successful live UTA retrieval |
 | Architecture diagram | `docs/media/architecture.png` | Optional exported version of the diagram below |
 
 <!-- Once screenshots exist, add a gallery here, e.g.:
@@ -98,18 +103,24 @@ A meaningful walkthrough follows the same history through the product:
 
 **Live demo:** [tryreflex.vercel.app](https://tryreflex.vercel.app)
 
-**Recorded demo:** _Placeholder: insert the public video URL here after it is produced and approved._
+**Recorded demo (YouTube):** _Placeholder: insert the public video URL here after it is uploaded and verified accessible._
+
+The walkthrough uses a **real retrospective RUNNER decision** to illustrate the loop. The example Autopsy's Decision Quality score is **provisional**, the financial outcome is **unknown**, the three DNA findings are **single-decision observations**, and the two Playbook proposals are **pending**. They are product outputs from one account, not evidence of improved trading performance. The separate optional Bitget Futures preview is excluded from the recorded success path because live UTA retrieval has not yet succeeded.
 
 ## Bitget integration: implemented vs. future
 
-Reflex has **three distinct integration paths**. They should not be confused:
+Reflex supports manual trade evidence and distinct Bitget integrations. Their availability and validation status matter:
 
-| Integration | Implementation | User-facing status |
+| Integration | Implementation | User-facing and verification status |
 | --- | --- | --- |
-| **Bitget Classic Spot CSV** | Preview real order/fill history, classify purpose, confirm import, retain import receipts and audit changes | Available in Trade Activity |
-| **Manual trade evidence** | Attach genuine known execution/cash-flow observations, including incomplete or retrospective accounts | Available in the decision workflow |
-| **Bitget authenticated Futures SDK** | Server-side, read-only import of selected closed USDT/USDC Futures position history with bounded queries and strict owner binding | Backend exists; **no self-service “Connect Bitget” UI** |
-| **Per-user Bitget account linking** | User-authorized API-key/OAuth onboarding and per-user synchronization | **Not implemented** |
+| **Manual trade evidence** | Attach genuinely known execution and cash-flow observations, including incomplete or retrospective accounts | **Implemented and exercised** in the decision workflow |
+| **Bitget Classic Spot CSV** | Preview order/fill history, classify trade purpose, confirm imports, and retain import receipts | **Implemented and live-exercised** in Trade Activity; importing does not imply every order represents a speculative decision |
+| **Bitget authenticated Futures SDK** | An owner-restricted frontend inside a confirmed decision: select USDT/USDC Futures, enter a trading pair and bounded dates, preview closed positions, and explicitly select and confirm evidence imports. Uses a read-only `getPositionsHistory` operation and protects private credentials server-side | **UI and handlers implemented; live UTA retrieval not validated.** A read-only `BTCUSDT` preview reached Bitget but returned provider error `400`. No position was imported in that test |
+| **Self-service Connect Bitget** | Account linking and independent API credentials / synchronization for each user | **Not implemented**; do not describe the owner-only import interface as multi-user account connection |
+
+**How the Futures flow works:** The eligible, explicitly bound account owner opens Trade Evidence on a confirmed decision and previews a bounded page of positions. Previewing stores nothing. Importing requires deliberate position selection, confirmation, and server-side decision/symbol checks, including an audited explanation where the exchange symbol differs from the decision. Up to ten eligible positions may be selected for a single import request, and duplicate records are handled idempotently. Unsupported or incomplete data must never be converted into invented trade evidence.
+
+**UTA compatibility limitation:** The SDK maps to Bitget's UTA position-history endpoint, but an authorized real-account preview returned a provider-side `400`; its underlying cause was not established. This is **not** evidence of successful account syncing or a successful live Futures import. Private Bitget API keys are not needed for the public market-context service.
 
 The private SDK path is restricted to an explicitly configured authenticated subject. It is **not** multi-user Bitget account syncing. Never put private exchange credentials in the client or treat an optional server-side binding as a user-facing connection feature. Exchange data also cannot, by itself, establish a trader's original motive.
 
@@ -232,6 +243,8 @@ npm run build
 
 Focused test suites include market adapters, persistence, AI, decisions, Autopsy, DNA, Recall, Playbook and Classic CSV. At the October 2026 release QA checkpoint, **476 automated tests passed** locally, with two pre-existing nonblocking lint warnings. This is a historical test result, **not** a claim that a GitHub Actions workflow is continuously passing.
 
+The subsequent Futures frontend and diagnostic work added focused regression coverage: the Autopsy-focused suite reached **158 passing tests** locally, with typecheck and production build passing. This does not establish live Bitget UTA compatibility or replace the earlier full-suite release QA result.
+
 Additional real-provider verification scripts exist, but may require real credentials and authenticated fixtures. Review their requirements before running them; they are not prerequisites to reading the README or browsing the public application.
 
 ## Security, privacy and evidence integrity
@@ -249,8 +262,8 @@ Additional real-provider verification scripts exist, but may require real creden
 
 ## Current limitations
 
-- No self-service Bitget account connection, account sync or trading execution.
-- Private Bitget read-only Futures import is an owner-bound backend integration, not a multi-tenant public connection.
+- No self-service Bitget account connection, automatic account sync or trading execution.
+- The Bitget Futures preview/select interface is **restricted to one configured, authenticated account owner**. A live UTA preview returned provider error `400`; successful live Futures retrieval or import is **not yet verified**. It is not a multi-tenant connection feature.
 - Public market context is a bounded backend service, not comprehensive investment research or guaranteed live enrichment of all reviews.
 - Autopsy generation can fail closed when the model cannot ground its findings; retry is not guaranteed to succeed.
 - Accepted-rule Recall and two-live-account isolation have automated coverage but were not live-verified in the release acceptance walkthrough.
